@@ -438,9 +438,16 @@ function CartRow({ row, formAction }: { row: Row; formAction: string }) {
                 Create draft order
               </button>
             </Form>
-            {row.url ? <Button url={row.url} target="_blank">Open cart / recovery link</Button> : null}
+            {row.source === "Abandoned checkout" && row.url ? (
+              <Button url={row.url} target="_blank">Open recovery link</Button>
+            ) : null}
           </div>
         </div>
+        {row.source === "Logged-in cart" ? (
+          <p style={{ margin: "0 0 10px", color: "#6b7280", fontSize: 13 }}>
+            Logged-in cart links are not customer recovery links. Use Create draft order for admin follow-up.
+          </p>
+        ) : null}
         <ItemList items={row.items} currencyCode={row.currencyCode} />
       </div>
     </details>
