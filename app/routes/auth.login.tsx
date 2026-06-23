@@ -1,23 +1,16 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
-import { json } from "@remix-run/node";
+import { redirect } from "@remix-run/node";
 import { login } from "../shopify.server";
-
-type LoaderData = {
-  error: string | null;
-};
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const shop = url.searchParams.get("shop");
 
+  // If Shopify did not provide a shop parameter, send the user back to the
+  // embedded app entry. Shopify Admin normally rehydrates the embedded context
+  // when the app is reopened from the Apps sidebar.
   if (!shop) {
-    return json<LoaderData>(
-      {
-        error:
-          "Missing shop parameter. Please open this app from Shopify Admin Apps.",
-      },
-      { status: 400 },
-    );
+    return redirect("/app");
   }
 
   const result = await login(request);
@@ -26,13 +19,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return result;
   }
 
-  return json<LoaderData>(
-    {
-      error:
-        "Shopify login could not start. Please reopen the app from Shopify Admin.",
-    },
-    { status: 400 },
-  );
+  return redirect("/app");
 }
 
 export default function AuthLogin() {
