@@ -1,0 +1,43 @@
+{
+  "name": "one-cart-reminder-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "shopify app dev",
+    "build": "remix vite:build",
+    "start": "remix-serve ./build/server/index.js",
+    "setup": "prisma generate && prisma migrate deploy",
+    "prisma": "prisma",
+    "typecheck": "tsc --noEmit",
+    "reminders:run": "tsx scripts/run-reminders.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "@remix-run/node": "^2.17.0",
+    "@remix-run/react": "^2.17.0",
+    "@remix-run/serve": "^2.17.0",
+    "@shopify/app-bridge-react": "^4.2.4",
+    "@shopify/polaris": "^13.9.5",
+    "@shopify/shopify-api": "^11.14.1",
+    "@shopify/shopify-app-remix": "^3.7.0",
+    "@shopify/shopify-app-session-storage-prisma": "^6.0.0",
+    "isbot": "^5.1.27",
+    "nodemailer": "^6.10.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@remix-run/dev": "^2.17.0",
+    "@types/node": "^22.13.1",
+    "@types/nodemailer": "^6.4.17",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "prisma": "^6.19.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.3",
+    "vite": "^6.0.0"
+  },
+  "engines": {
+    "node": ">=20.10"
+  }
+}

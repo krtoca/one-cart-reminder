@@ -1,0 +1,20 @@
+name = "One Cart Reminder"
+client_id = "REPLACE_WITH_SHOPIFY_CLIENT_ID"
+application_url = "https://REPLACE_WITH_RENDER_DOMAIN"
+embedded = true
+
+[access_scopes]
+scopes = "read_orders,read_customers,read_checkouts,write_marketing_events"
+
+[auth]
+redirect_urls = [
+  "https://REPLACE_WITH_RENDER_DOMAIN/auth/callback",
+  "https://REPLACE_WITH_RENDER_DOMAIN/auth/shopify/callback",
+  "https://REPLACE_WITH_RENDER_DOMAIN/api/auth/callback"
+]
+
+[webhooks]
+api_version = "2026-04"
+
+[pos]
+embedded = false

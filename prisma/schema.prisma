@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+}
+
+model CartReminderSetting {
+  id                         String   @id @default(cuid())
+  shop                       String   @unique
+  isEnabled                  Boolean  @default(true)
+  loggedInCartEnabled        Boolean  @default(true)
+  abandonedCheckoutEnabled   Boolean  @default(true)
+  autoCartSyncEnabled         Boolean  @default(false)
+  daysAfter                  Int      @default(7)
+  dailySendHour              Int      @default(9)
+  timezone                   String   @default("America/Toronto")
+  fromName                   String   @default("One Wholesale")
+  subject                    String   @default("You left items in your cart")
+  headline                   String   @default("Your cart is waiting")
+  bodyText                   String   @default("You left some items in your cart. You can continue where you left off below.")
+  buttonText                 String   @default("Return to cart")
+  footerText                 String   @default("You are receiving this because you have an account or started checkout on our store. You can unsubscribe from marketing emails anytime.")
+  storefrontUrl              String?
+  trackerToken               String   @default(cuid())
+  lastCronRunAt              DateTime?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+}
+
+model CustomerCart {
+  id               String    @id @default(cuid())
+  shop             String
+  customerId       String?
+  customerEmail    String
+  cartToken        String?
+  cartUrl          String?
+  itemCount        Int       @default(0)
+  subtotal         Decimal?  @db.Decimal(12, 2)
+  currencyCode     String?
+  lineItems        Json?
+  source           String    @default("LOGGED_IN_CART")
+  lastCapturedAt   DateTime  @default(now())
+  orderedAt        DateTime?
+  reminderSentAt   DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([shop, customerEmail])
+  @@index([shop, lastCapturedAt])
+}
+
+model AbandonedCheckoutReminder {
+  id                   String    @id @default(cuid())
+  shop                 String
+  abandonedCheckoutId   String
+  checkoutName          String?
+  customerEmail         String
+  customerId            String?
+  checkoutUrl           String
+  totalPrice            Decimal?  @db.Decimal(12, 2)
+  currencyCode          String?
+  itemCount             Int       @default(0)
+  lineItems             Json?
+  checkoutCreatedAt     DateTime
+  checkoutUpdatedAt     DateTime
+  checkoutCompletedAt   DateTime?
+  reminderSentAt        DateTime?
+  lastSyncedAt          DateTime  @default(now())
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([shop, abandonedCheckoutId])
+  @@index([shop, customerEmail])
+  @@index([shop, checkoutCreatedAt])
+}
+
+model ReminderEmailLog {
+  id             String   @id @default(cuid())
+  shop           String
+  sourceType     String
+  sourceId       String
+  email          String
+  subject        String
+  ok             Boolean  @default(false)
+  errorMessage   String?
+  sentAt         DateTime @default(now())
+
+  @@unique([shop, sourceType, sourceId])
+  @@index([shop, email])
+}

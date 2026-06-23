@@ -1,0 +1,8 @@
+node_modules
+.env
+.env.*
+!.env.example
+build
+.cache
+.shopify
+.DS_Store

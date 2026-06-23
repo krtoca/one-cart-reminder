@@ -1,0 +1,169 @@
+{% comment %}
+  One Cart Reminder - Logged-in customer cart tracker
+  This app embed is multi-store safe because it sends shop.permanent_domain and a per-shop tracker token.
+  Auto sync is controlled from the app Settings page. Keep Auto sync OFF while Casper is active.
+{% endcomment %}
+
+{% if customer and customer.email %}
+<script>
+(function () {
+  var appUrl = {{ block.settings.app_url | json }};
+  var trackerToken = {{ block.settings.tracker_token | json }};
+  var shop = {{ shop.permanent_domain | json }};
+  var customerId = {{ customer.id | json }};
+  var customerEmail = {{ customer.email | json }};
+  var didTrySync = false;
+
+  if (!appUrl || !trackerToken || !customerEmail) return;
+  appUrl = appUrl.replace(/\/$/, "");
+
+  function toCartUrl(cart) {
+    if (cart && cart.token) {
+      return window.location.origin + "/cart?cart_token=" + encodeURIComponent(cart.token);
+    }
+    return window.location.origin + "/cart";
+  }
+
+  function mapCartItems(cart) {
+    return (cart.items || []).map(function (item) {
+      return {
+        productId: item.product_id,
+        variantId: item.variant_id,
+        title: item.product_title || item.title,
+        variantTitle: item.variant_title,
+        sku: item.sku,
+        quantity: item.quantity,
+        price: item.price ? (Number(item.price) / 100).toFixed(2) : null,
+        url: item.url
+      };
+    });
+  }
+
+  function sendCart(cart) {
+    if (!cart || !cart.item_count) return Promise.resolve({ skipped: true });
+    return fetch(appUrl + "/api/cart/capture", {
+      method: "POST",
+      mode: "cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        shop: shop,
+        trackerToken: trackerToken,
+        customerId: String(customerId || ""),
+        customerEmail: customerEmail,
+        cartToken: cart.token || null,
+        cartUrl: toCartUrl(cart),
+        itemCount: cart.item_count || 0,
+        subtotal: cart.total_price ? (Number(cart.total_price) / 100).toFixed(2) : null,
+        currencyCode: {{ cart.currency.iso_code | default: shop.currency | json }},
+        lineItems: mapCartItems(cart)
+      })
+    }).then(function (res) { return res.json().catch(function () { return {}; }); });
+  }
+
+  function addMissingItemsFromSavedCart(currentCart) {
+    if (didTrySync) return Promise.resolve(false);
+    didTrySync = true;
+
+    return fetch(appUrl + "/api/cart/sync", {
+      method: "POST",
+      mode: "cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        shop: shop,
+        trackerToken: trackerToken,
+        customerId: String(customerId || ""),
+        customerEmail: customerEmail
+      })
+    })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (!data || !data.enabled || !Array.isArray(data.lineItems) || !data.lineItems.length) return false;
+
+        var currentByVariant = {};
+        (currentCart.items || []).forEach(function (item) {
+          currentByVariant[String(item.variant_id)] = Number(item.quantity || 0);
+        });
+
+        var adds = data.lineItems
+          .map(function (item) {
+            var variantId = String(item.variantId || "");
+            var savedQty = Number(item.quantity || 0);
+            var currentQty = Number(currentByVariant[variantId] || 0);
+            var addQty = Math.max(0, savedQty - currentQty);
+            return { id: variantId, quantity: addQty };
+          })
+          .filter(function (item) { return item.id && item.quantity > 0; });
+
+        if (!adds.length) return false;
+
+        return fetch("/cart/add.js", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: adds })
+        }).then(function () { return true; });
+      })
+      .catch(function (e) {
+        console.warn("Cart reminder auto sync skipped", e);
+        return false;
+      });
+  }
+
+  function capture() {
+    fetch("/cart.js", { credentials: "same-origin" })
+      .then(function (res) { return res.json(); })
+      .then(function (cart) {
+        return addMissingItemsFromSavedCart(cart).then(function (changed) {
+          if (!changed) return cart;
+          return fetch("/cart.js", { credentials: "same-origin" }).then(function (res) { return res.json(); });
+        });
+      })
+      .then(sendCart)
+      .catch(function () {});
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", capture);
+  } else {
+    capture();
+  }
+
+  document.addEventListener("submit", function (event) {
+    var form = event.target;
+    if (form && form.action && form.action.indexOf("/cart/add") !== -1) {
+      setTimeout(capture, 1200);
+    }
+  }, true);
+
+  document.addEventListener("click", function (event) {
+    var el = event.target && event.target.closest ? event.target.closest("button, a, input[type='submit']") : null;
+    if (!el) return;
+    var text = (el.textContent || el.value || "").toLowerCase();
+    if (text.indexOf("add to cart") !== -1 || text.indexOf("add") !== -1) {
+      setTimeout(capture, 1500);
+    }
+  }, true);
+})();
+</script>
+{% endif %}
+
+{% schema %}
+{
+  "name": "Cart Reminder Tracker",
+  "target": "body",
+  "settings": [
+    {
+      "type": "url",
+      "id": "app_url",
+      "label": "App URL",
+      "info": "Example: https://one-cart-reminder.onrender.com"
+    },
+    {
+      "type": "text",
+      "id": "tracker_token",
+      "label": "Tracker token",
+      "info": "Copy the token from this store's Cart Reminder app Settings. Each store has a separate token."
+    }
+  ]
+}
+{% endschema %}
