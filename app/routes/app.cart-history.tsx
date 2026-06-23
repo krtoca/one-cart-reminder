@@ -331,7 +331,7 @@ export async function action({ request }: ActionFunctionArgs) {
   if (errors.length) {
     return json<ActionData>({
       ok: false,
-      message: errors.map((error: any) => error.message).join("; "),
+      message: errors.map((error: any) => error.message).join("; ") || "Draft order could not be created. Please check write_draft_orders permission.",
     }, { status: 400 });
   }
 
@@ -394,7 +394,7 @@ function ItemList({ items, currencyCode }: { items: LineItem[]; currencyCode?: s
 const thStyle: React.CSSProperties = { padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "#374151", borderBottom: "1px solid #e5e7eb" };
 const tdStyle: React.CSSProperties = { padding: "10px 12px", verticalAlign: "top", color: "#111827" };
 
-function CartRow({ row }: { row: Row }) {
+function CartRow({ row, formAction }: { row: Row; formAction: string }) {
   return (
     <details style={{ borderBottom: "1px solid #e5e7eb" }}>
       <summary style={{ listStyle: "none", cursor: "pointer", padding: "16px 14px" }}>
@@ -419,11 +419,24 @@ function CartRow({ row }: { row: Row }) {
             {row.email ? <Badge tone="info">{row.email}</Badge> : null}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Form method="post">
+            <Form method="post" action={formAction} reloadDocument>
               <input type="hidden" name="actionType" value="createDraft" />
               <input type="hidden" name="id" value={row.id} />
               <input type="hidden" name="source" value={row.source} />
-              <Button submit variant="primary">Create draft order</Button>
+              <button
+                type="submit"
+                style={{
+                  border: "1px solid #202223",
+                  background: "#202223",
+                  color: "#fff",
+                  borderRadius: 8,
+                  padding: "8px 12px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                Create draft order
+              </button>
             </Form>
             {row.url ? <Button url={row.url} target="_blank">Open cart / recovery link</Button> : null}
           </div>
@@ -438,6 +451,7 @@ export default function CartHistoryPage() {
   const { shop, days, rows, totals } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>() as ActionData | undefined;
   const location = useLocation();
+  const formAction = `${location.pathname}${location.search}`;
   const preservedParams = new URLSearchParams(location.search);
   preservedParams.delete("days");
   const preservedEntries = Array.from(preservedParams.entries());
@@ -523,7 +537,7 @@ export default function CartHistoryPage() {
                   <div>Last updated</div>
                   <div style={{ textAlign: "right" }}>Status</div>
                 </div>
-                {filteredRows.map((row) => <CartRow key={`${row.source}-${row.id}`} row={row} />)}
+                {filteredRows.map((row) => <CartRow key={`${row.source}-${row.id}`} row={row} formAction={formAction} />)}
               </div>
             </div>
           )}
