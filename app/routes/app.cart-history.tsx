@@ -126,44 +126,6 @@ function trimDebug(value: unknown) {
   }
 }
 
-function topLevelAdminRedirectResponse(targetUrl: string) {
-  const safeTarget = JSON.stringify(targetUrl);
-  return new Response(
-    `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Opening draft order...</title>
-    <script>
-      (function () {
-        var target = ${safeTarget};
-        try {
-          if (window.top) {
-            window.top.location.href = target;
-          } else {
-            window.location.href = target;
-          }
-        } catch (error) {
-          window.location.href = target;
-        }
-      })();
-    </script>
-    <meta http-equiv="refresh" content="1; url=${targetUrl}" />
-  </head>
-  <body style="font-family: Arial, sans-serif; padding: 24px;">
-    <p>Opening draft order...</p>
-    <p><a href="${targetUrl}" target="_top" rel="noreferrer">Click here if it does not open automatically.</a></p>
-  </body>
-</html>`,
-    {
-      status: 200,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-      },
-    },
-  );
-}
-
 async function loadCustomerInfo(admin: any, rows: Array<{ customerId: string | null; email: string | null }>) {
   const ids = Array.from(
     new Set(
@@ -458,10 +420,6 @@ export async function action({ request }: ActionFunctionArgs) {
   const legacyId = draft.legacyResourceId;
   const draftUrl = legacyId ? `https://admin.shopify.com/store/${shopAdminHandle(session.shop)}/draft_orders/${legacyId}` : undefined;
 
-  if (draftUrl) {
-    return topLevelAdminRedirectResponse(draftUrl);
-  }
-
   return json<ActionData>({
     ok: true,
     message: `Draft order ${draft.name || ""} was created successfully.`,
@@ -541,7 +499,7 @@ function CartRow({ row, formAction }: { row: Row; formAction: string }) {
             {row.lastOrderDate ? <Badge tone="success">{`Last order: ${row.lastOrderName || ""} ${dateText(row.lastOrderDate)}`}</Badge> : null}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Form method="post" action={formAction} target="_top" reloadDocument>
+            <Form method="post" action={formAction} reloadDocument>
               <input type="hidden" name="actionType" value="createDraft" />
               <input type="hidden" name="id" value={row.id} />
               <input type="hidden" name="source" value={row.source} />
@@ -623,7 +581,7 @@ export default function CartHistoryPage() {
           ) : null}
           {actionData.draftUrl ? (
             <div style={{ marginTop: 8 }}>
-              <Button url={actionData.draftUrl} target="_top">Open draft order</Button>
+              <Button url={actionData.draftUrl} target="_blank">Open draft order</Button>
             </div>
           ) : null}
         </div>
