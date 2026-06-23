@@ -188,7 +188,7 @@ export default function CartHistoryPage() {
           </div>
         </Card>
       ) : (
-        <BlockStack gap="350">
+        <BlockStack gap="400">
           {rows.map((row) => (
             <Card key={`${row.source}-${row.id}`}>
               <BlockStack gap="400">
@@ -230,3 +230,4 @@ export default function CartHistoryPage() {
     </BlockStack>
   );
 }
+
