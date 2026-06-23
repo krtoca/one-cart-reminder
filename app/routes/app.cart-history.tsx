@@ -23,6 +23,9 @@ type Row = {
   email: string | null;
   customerId: string | null;
   customerName: string | null;
+  orderCount: number | null;
+  lastOrderDate: string | null;
+  lastOrderName: string | null;
   capturedAt: string;
   itemCount: number;
   total: string | null;
@@ -38,6 +41,7 @@ type ActionData = {
   message: string;
   draftUrl?: string;
   draftName?: string;
+  debug?: string;
 };
 
 function safeDays(value: string | null) {
@@ -114,7 +118,53 @@ function shopAdminHandle(shop: string) {
   return shop.replace(".myshopify.com", "");
 }
 
-async function loadCustomerNames(admin: any, rows: Array<{ customerId: string | null; email: string | null }>) {
+function trimDebug(value: unknown) {
+  try {
+    return JSON.stringify(value, null, 2).slice(0, 2000);
+  } catch {
+    return String(value).slice(0, 2000);
+  }
+}
+
+function topLevelAdminRedirectResponse(targetUrl: string) {
+  const safeTarget = JSON.stringify(targetUrl);
+  return new Response(
+    `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Opening draft order...</title>
+    <script>
+      (function () {
+        var target = ${safeTarget};
+        try {
+          if (window.top) {
+            window.top.location.href = target;
+          } else {
+            window.location.href = target;
+          }
+        } catch (error) {
+          window.location.href = target;
+        }
+      })();
+    </script>
+    <meta http-equiv="refresh" content="1; url=${targetUrl}" />
+  </head>
+  <body style="font-family: Arial, sans-serif; padding: 24px;">
+    <p>Opening draft order...</p>
+    <p><a href="${targetUrl}" target="_top" rel="noreferrer">Click here if it does not open automatically.</a></p>
+  </body>
+</html>`,
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+      },
+    },
+  );
+}
+
+async function loadCustomerInfo(admin: any, rows: Array<{ customerId: string | null; email: string | null }>) {
   const ids = Array.from(
     new Set(
       rows
@@ -123,14 +173,14 @@ async function loadCustomerNames(admin: any, rows: Array<{ customerId: string | 
     ),
   ).slice(0, 100);
 
-  const namesByGid = new Map<string, string>();
+  const infoByGid = new Map<string, { name: string | null; orderCount: number | null; lastOrderDate: string | null; lastOrderName: string | null }>();
 
-  if (!ids.length) return namesByGid;
+  if (!ids.length) return infoByGid;
 
   try {
     const response = await admin.graphql(
       `#graphql
-      query CustomerNames($ids: [ID!]!) {
+      query CustomerCartInfo($ids: [ID!]!) {
         nodes(ids: $ids) {
           ... on Customer {
             id
@@ -138,6 +188,14 @@ async function loadCustomerNames(admin: any, rows: Array<{ customerId: string | 
             email
             firstName
             lastName
+            numberOfOrders
+            orders(first: 1, sortKey: PROCESSED_AT, reverse: true) {
+              nodes {
+                name
+                processedAt
+                createdAt
+              }
+            }
           }
         }
       }`,
@@ -145,19 +203,31 @@ async function loadCustomerNames(admin: any, rows: Array<{ customerId: string | 
     );
 
     const payload = await response.json();
+
+    if (payload?.errors?.length) {
+      console.warn("Customer order lookup GraphQL errors", payload.errors);
+      return infoByGid;
+    }
+
     const nodes = payload?.data?.nodes || [];
 
     for (const node of nodes) {
       if (!node?.id) continue;
       const name = String(node.displayName || `${node.firstName || ""} ${node.lastName || ""}`.trim() || node.email || "").trim();
-      if (name) namesByGid.set(node.id, name);
+      const lastOrder = node.orders?.nodes?.[0] || null;
+      infoByGid.set(node.id, {
+        name: name || null,
+        orderCount: Number.isFinite(Number(node.numberOfOrders)) ? Number(node.numberOfOrders) : null,
+        lastOrderDate: lastOrder?.processedAt || lastOrder?.createdAt || null,
+        lastOrderName: lastOrder?.name || null,
+      });
     }
   } catch (error) {
-    // Customer name lookup is helpful but should not block cart history.
-    console.warn("Customer name lookup skipped", error);
+    // Customer/order lookup is helpful but should not block cart history.
+    console.warn("Customer/order lookup skipped", error);
   }
 
-  return namesByGid;
+  return infoByGid;
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -187,6 +257,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       email: cart.customerEmail,
       customerId: cart.customerId,
       customerName: null,
+      orderCount: null,
+      lastOrderDate: null,
+      lastOrderName: null,
       capturedAt: cart.lastCapturedAt.toISOString(),
       itemCount: cart.itemCount,
       total: cart.subtotal ? cart.subtotal.toString() : null,
@@ -202,6 +275,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       email: checkout.customerEmail,
       customerId: checkout.customerId,
       customerName: null,
+      orderCount: null,
+      lastOrderDate: null,
+      lastOrderName: null,
       capturedAt: checkout.checkoutCreatedAt.toISOString(),
       itemCount: checkout.itemCount,
       total: checkout.totalPrice ? checkout.totalPrice.toString() : null,
@@ -213,14 +289,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
     })),
   ].sort((a, b) => new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime());
 
-  const namesByGid = await loadCustomerNames(admin, baseRows);
+  const infoByGid = await loadCustomerInfo(admin, baseRows);
 
   const rows = baseRows.map((row) => {
     const gid = normalizeCustomerGid(row.customerId);
-    const customerName = gid ? namesByGid.get(gid) || null : null;
+    const customerInfo = gid ? infoByGid.get(gid) || null : null;
     return {
       ...row,
-      customerName: customerName || customerFallbackName(row.email, row.customerId),
+      customerName: customerInfo?.name || customerFallbackName(row.email, row.customerId),
+      orderCount: customerInfo?.orderCount ?? null,
+      lastOrderDate: customerInfo?.lastOrderDate ?? null,
+      lastOrderName: customerInfo?.lastOrderName ?? null,
     };
   });
 
@@ -260,44 +339,6 @@ async function findCartSource(shop: string, source: string, id: string) {
   return null;
 }
 
-
-function topLevelAdminRedirectResponse(targetUrl: string) {
-  const safeTarget = JSON.stringify(targetUrl);
-  return new Response(
-    `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Opening draft order...</title>
-    <script>
-      (function () {
-        var target = ${safeTarget};
-        try {
-          if (window.top) {
-            window.top.location.href = target;
-          } else {
-            window.location.href = target;
-          }
-        } catch (error) {
-          window.location.href = target;
-        }
-      })();
-    </script>
-  </head>
-  <body style="font-family: Arial, sans-serif; padding: 24px;">
-    <p>Opening draft order...</p>
-    <p><a href="${targetUrl}" target="_top" rel="noreferrer">Click here if it does not open automatically.</a></p>
-  </body>
-</html>`,
-    {
-      status: 200,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-      },
-    },
-  );
-}
-
 export async function action({ request }: ActionFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
   const formData = await request.formData();
@@ -315,17 +356,24 @@ export async function action({ request }: ActionFunctionArgs) {
     return json<ActionData>({ ok: false, message: "Cart record was not found." }, { status: 404 });
   }
 
+  const skippedItems: string[] = [];
+
   const draftLineItems = cart.lineItems
-    .map((item) => ({
-      variantId: normalizeVariantGid(item.variantId),
-      quantity: Math.max(1, Number(item.quantity || 0)),
-    }))
+    .map((item) => {
+      const variantId = normalizeVariantGid(item.variantId);
+      const quantity = Math.max(1, Number(item.quantity || 0));
+      if (!variantId) {
+        skippedItems.push(`${item.title || "Untitled item"}${item.sku ? ` (${item.sku})` : ""}`);
+      }
+      return { variantId, quantity };
+    })
     .filter((item) => item.variantId && item.quantity > 0);
 
   if (!draftLineItems.length) {
     return json<ActionData>({
       ok: false,
       message: "No valid Shopify variant IDs were found in this cart, so a draft order could not be created.",
+      debug: `Skipped items: ${skippedItems.slice(0, 20).join(", ")}`,
     }, { status: 400 });
   }
 
@@ -334,7 +382,7 @@ export async function action({ request }: ActionFunctionArgs) {
   const input: any = {
     email: cart.email || undefined,
     customerId: customerGid || undefined,
-    note: cart.note,
+    note: `${cart.note}${skippedItems.length ? `\n\nSkipped items without variant ID: ${skippedItems.slice(0, 20).join(", ")}` : ""}`,
     tags: ["one-cart-reminder", source === "Logged-in cart" ? "logged-in-cart" : "abandoned-checkout"],
     lineItems: draftLineItems,
   };
@@ -343,40 +391,68 @@ export async function action({ request }: ActionFunctionArgs) {
     input.useCustomerDefaultAddress = true;
   }
 
-  const response = await admin.graphql(
-    `#graphql
-    mutation CreateCartReminderDraftOrder($input: DraftOrderInput!) {
-      draftOrderCreate(input: $input) {
-        draftOrder {
-          id
-          name
-          legacyResourceId
-          invoiceUrl
-        }
-        userErrors {
-          field
-          message
-        }
-      }
-    }`,
-    { variables: { input } },
-  );
+  let payload: any;
 
-  const payload = await response.json();
+  try {
+    const response = await admin.graphql(
+      `#graphql
+      mutation CreateCartReminderDraftOrder($input: DraftOrderInput!) {
+        draftOrderCreate(input: $input) {
+          draftOrder {
+            id
+            name
+            legacyResourceId
+            invoiceUrl
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }`,
+      { variables: { input } },
+    );
+
+    payload = await response.json();
+  } catch (error: any) {
+    console.error("Draft order GraphQL request failed", error);
+    return json<ActionData>({
+      ok: false,
+      message: "Draft order request failed before Shopify returned a result.",
+      debug: error?.message || String(error),
+    }, { status: 500 });
+  }
+
+  if (payload?.errors?.length) {
+    console.error("Draft order GraphQL errors", payload.errors);
+    return json<ActionData>({
+      ok: false,
+      message: payload.errors.map((error: any) => error.message).join("; ") || "Shopify GraphQL error.",
+      debug: trimDebug(payload.errors),
+    }, { status: 400 });
+  }
+
   const result = payload?.data?.draftOrderCreate;
   const errors = result?.userErrors || [];
 
   if (errors.length) {
+    console.error("Draft order userErrors", errors);
     return json<ActionData>({
       ok: false,
-      message: errors.map((error: any) => error.message).join("; ") || "Draft order could not be created. Please check write_draft_orders permission.",
+      message: errors.map((error: any) => error.message).join("; ") || "Draft order could not be created.",
+      debug: trimDebug(errors),
     }, { status: 400 });
   }
 
   const draft = result?.draftOrder;
 
   if (!draft?.id) {
-    return json<ActionData>({ ok: false, message: "Shopify did not return a draft order." }, { status: 400 });
+    console.error("Draft order missing in response", payload);
+    return json<ActionData>({
+      ok: false,
+      message: "Shopify did not return a draft order.",
+      debug: trimDebug(payload),
+    }, { status: 400 });
   }
 
   const legacyId = draft.legacyResourceId;
@@ -386,15 +462,12 @@ export async function action({ request }: ActionFunctionArgs) {
     return topLevelAdminRedirectResponse(draftUrl);
   }
 
-  if (draftUrl) {
-    return topLevelAdminRedirectResponse(draftUrl);
-  }
-
   return json<ActionData>({
     ok: true,
-    message: `Draft order ${draft.name || ""} was created successfully, but the Shopify Admin URL was not available.`,
+    message: `Draft order ${draft.name || ""} was created successfully.`,
     draftName: draft.name || undefined,
     draftUrl,
+    debug: skippedItems.length ? `Skipped ${skippedItems.length} item(s) without Shopify variant ID.` : undefined,
   });
 }
 
@@ -444,13 +517,14 @@ function CartRow({ row, formAction }: { row: Row; formAction: string }) {
   return (
     <details style={{ borderBottom: "1px solid #e5e7eb" }}>
       <summary style={{ listStyle: "none", cursor: "pointer", padding: "16px 14px" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.4fr) 120px 140px 190px 130px", gap: 16, alignItems: "center" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.4fr) 120px 140px 160px 160px 130px", gap: 16, alignItems: "center" }}>
           <div>
             <div style={{ fontWeight: 750, color: "#111827" }}>{row.customerName || customerFallbackName(row.email, row.customerId)}</div>
           </div>
           <div style={{ fontWeight: 650 }}>{row.itemCount} item{row.itemCount === 1 ? "" : "s"} ▾</div>
           <div>{money(row.total, row.currencyCode)}</div>
-          <div>{dateText(row.capturedAt)}</div>
+          <div>{row.orderCount === null ? "-" : `${row.orderCount} order${row.orderCount === 1 ? "" : "s"}`}</div>
+          <div>{row.lastOrderDate ? `${row.lastOrderName || ""} ${dateText(row.lastOrderDate)}`.trim() : "-"}</div>
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
             <span style={{ padding: "5px 9px", borderRadius: 999, background: statusClass(row.status), fontSize: 12, fontWeight: 700 }}>{row.status}</span>
           </div>
@@ -463,9 +537,11 @@ function CartRow({ row, formAction }: { row: Row; formAction: string }) {
             <Badge tone={statusTone(row.status)}>{row.status}</Badge>
             {row.reminderSentAt ? <Badge tone="success">{`Sent ${dateText(row.reminderSentAt)}`}</Badge> : null}
             {row.email ? <Badge tone="info">{row.email}</Badge> : null}
+            {row.orderCount !== null ? <Badge tone="info">{`${row.orderCount} lifetime order${row.orderCount === 1 ? "" : "s"}`}</Badge> : null}
+            {row.lastOrderDate ? <Badge tone="success">{`Last order: ${row.lastOrderName || ""} ${dateText(row.lastOrderDate)}`}</Badge> : null}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Form method="post" action={formAction} reloadDocument>
+            <Form method="post" action={formAction} target="_top" reloadDocument>
               <input type="hidden" name="actionType" value="createDraft" />
               <input type="hidden" name="id" value={row.id} />
               <input type="hidden" name="source" value={row.source} />
@@ -515,13 +591,15 @@ export default function CartHistoryPage() {
     const q = query.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter((row) => {
-      const haystack = [row.customerName, row.email, row.customerId, row.source, row.status, ...row.items.flatMap((item) => [item.title, item.sku, item.variantTitle])]
+      const haystack = [row.customerName, row.email, row.customerId, row.source, row.status, row.lastOrderName, ...row.items.flatMap((item) => [item.title, item.sku, item.variantTitle])]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
       return haystack.includes(q);
     });
   }, [query, rows]);
+
+  const getFormAction = `${location.pathname}`;
 
   return (
     <BlockStack gap="500">
@@ -540,9 +618,12 @@ export default function CartHistoryPage() {
           padding: 14,
         }}>
           <Text as="p" fontWeight="semibold">{actionData.message}</Text>
+          {actionData.debug ? (
+            <pre style={{ whiteSpace: "pre-wrap", marginTop: 10, color: "#374151", fontSize: 12 }}>{actionData.debug}</pre>
+          ) : null}
           {actionData.draftUrl ? (
             <div style={{ marginTop: 8 }}>
-              <Button url={actionData.draftUrl} target="_blank">Open draft order</Button>
+              <Button url={actionData.draftUrl} target="_top">Open draft order</Button>
             </div>
           ) : null}
         </div>
@@ -555,14 +636,28 @@ export default function CartHistoryPage() {
       </InlineGrid>
 
       <Card>
-        <Form method="get">
+        <form method="get" action={getFormAction}>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 240px) auto 1fr", gap: 14, alignItems: "end" }}>
             {preservedEntries.map(([key, value]) => <input key={`${key}-${value}`} type="hidden" name={key} value={value} />)}
             <TextField label="Show last N days" name="days" type="number" min={1} max={90} value={daysValue} onChange={setDaysValue} autoComplete="off" helpText="Default is 30 days. Maximum is 90 days." />
-            <Button submit variant="primary">Update view</Button>
+            <button
+              type="submit"
+              style={{
+                border: "1px solid #202223",
+                background: "#202223",
+                color: "#fff",
+                borderRadius: 8,
+                padding: "9px 14px",
+                fontWeight: 700,
+                cursor: "pointer",
+                height: 38,
+              }}
+            >
+              Update view
+            </button>
             <Text as="p" tone="subdued">Showing {filteredRows.length} of {rows.length} records.</Text>
           </div>
-        </Form>
+        </form>
       </Card>
 
       <Card>
@@ -582,12 +677,13 @@ export default function CartHistoryPage() {
             </div>
           ) : (
             <div style={{ overflowX: "auto" }}>
-              <div style={{ minWidth: 900 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.4fr) 120px 140px 190px 130px", gap: 16, padding: "12px 14px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", fontWeight: 750, color: "#374151" }}>
+              <div style={{ minWidth: 1080 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.4fr) 120px 140px 160px 160px 130px", gap: 16, padding: "12px 14px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", fontWeight: 750, color: "#374151" }}>
                   <div>Customer</div>
                   <div>Items</div>
                   <div>Cart total</div>
-                  <div>Last updated</div>
+                  <div>Orders</div>
+                  <div>Last order</div>
                   <div style={{ textAlign: "right" }}>Status</div>
                 </div>
                 {filteredRows.map((row) => <CartRow key={`${row.source}-${row.id}`} row={row} formAction={formAction} />)}
