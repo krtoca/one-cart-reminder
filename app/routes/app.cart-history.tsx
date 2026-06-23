@@ -135,6 +135,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 function Metric({ label, value, help }: { label: string; value: number; help: string }) {
   return (
+      <>
+      
+/* CR_COMPACT_HISTORY_LIST_FIX */
+<style>
+  .cart-history-table tbody tr > td .cart-source-line,
+  .cart-history-table tbody tr > td .cart-item-preview,
+  .cart-history-table tbody tr > td .cart-preview-line,
+  .cart-history-table tbody tr > td .muted-preview,
+  .cart-history-table tbody tr > td [data-cart-preview="true"],
+  .cart-history-table tbody tr > td [data-cart-source="true"] {
+    display: none !important;
+  }
+</style>
+
     <Card>
       <BlockStack gap="150">
         <Text as="p" tone="subdued">{label}</Text>
