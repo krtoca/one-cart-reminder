@@ -1,12 +1,14 @@
-import type { LoaderFunctionArgs } from "@remix-run/node";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { Form, useLoaderData, useLocation } from "@remix-run/react";
+import { Form, useActionData, useLoaderData, useLocation } from "@remix-run/react";
 import { Badge, BlockStack, Button, Card, InlineGrid, Text, TextField } from "@shopify/polaris";
 import { useMemo, useState } from "react";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 
 type LineItem = {
+  productId?: string | number | null;
+  variantId?: string | number | null;
   title?: string | null;
   variantTitle?: string | null;
   sku?: string | null;
@@ -20,6 +22,7 @@ type Row = {
   source: "Logged-in cart" | "Abandoned checkout";
   email: string | null;
   customerId: string | null;
+  customerName: string | null;
   capturedAt: string;
   itemCount: number;
   total: string | null;
@@ -28,6 +31,13 @@ type Row = {
   items: LineItem[];
   status: string;
   reminderSentAt: string | null;
+};
+
+type ActionData = {
+  ok: boolean;
+  message: string;
+  draftUrl?: string;
+  draftName?: string;
 };
 
 function safeDays(value: string | null) {
@@ -39,8 +49,10 @@ function safeDays(value: string | null) {
 function toLineItems(value: unknown): LineItem[] {
   if (!Array.isArray(value)) return [];
   return value.map((item: any) => ({
+    productId: item?.productId ?? item?.product_id ?? null,
+    variantId: item?.variantId ?? item?.variant_id ?? item?.id ?? null,
     title: item?.title || "Untitled item",
-    variantTitle: item?.variantTitle || null,
+    variantTitle: item?.variantTitle || item?.variant_title || null,
     sku: item?.sku || null,
     quantity: item?.quantity ?? 0,
     price: item?.price ?? null,
@@ -74,8 +86,82 @@ function statusClass(status: string) {
   return "#eff6ff";
 }
 
+function normalizeCustomerGid(value: string | null | undefined) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (raw.startsWith("gid://shopify/Customer/")) return raw;
+  const numeric = raw.replace(/\D/g, "");
+  if (!numeric) return null;
+  return `gid://shopify/Customer/${numeric}`;
+}
+
+function normalizeVariantGid(value: string | number | null | undefined) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (raw.startsWith("gid://shopify/ProductVariant/")) return raw;
+  const numeric = raw.replace(/\D/g, "");
+  if (!numeric) return null;
+  return `gid://shopify/ProductVariant/${numeric}`;
+}
+
+function customerFallbackName(email: string | null, customerId: string | null) {
+  if (email) return email.split("@")[0] || email;
+  if (customerId) return `Customer ${customerId}`;
+  return "Unknown customer";
+}
+
+function shopAdminHandle(shop: string) {
+  return shop.replace(".myshopify.com", "");
+}
+
+async function loadCustomerNames(admin: any, rows: Array<{ customerId: string | null; email: string | null }>) {
+  const ids = Array.from(
+    new Set(
+      rows
+        .map((row) => normalizeCustomerGid(row.customerId))
+        .filter(Boolean) as string[],
+    ),
+  ).slice(0, 100);
+
+  const namesByGid = new Map<string, string>();
+
+  if (!ids.length) return namesByGid;
+
+  try {
+    const response = await admin.graphql(
+      `#graphql
+      query CustomerNames($ids: [ID!]!) {
+        nodes(ids: $ids) {
+          ... on Customer {
+            id
+            displayName
+            email
+            firstName
+            lastName
+          }
+        }
+      }`,
+      { variables: { ids } },
+    );
+
+    const payload = await response.json();
+    const nodes = payload?.data?.nodes || [];
+
+    for (const node of nodes) {
+      if (!node?.id) continue;
+      const name = String(node.displayName || `${node.firstName || ""} ${node.lastName || ""}`.trim() || node.email || "").trim();
+      if (name) namesByGid.set(node.id, name);
+    }
+  } catch (error) {
+    // Customer name lookup is helpful but should not block cart history.
+    console.warn("Customer name lookup skipped", error);
+  }
+
+  return namesByGid;
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shop = session.shop;
   const url = new URL(request.url);
   const days = safeDays(url.searchParams.get("days"));
@@ -94,12 +180,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }),
   ]);
 
-  const rows: Row[] = [
+  const baseRows: Row[] = [
     ...loggedInCarts.map((cart) => ({
       id: cart.id,
       source: "Logged-in cart" as const,
       email: cart.customerEmail,
       customerId: cart.customerId,
+      customerName: null,
       capturedAt: cart.lastCapturedAt.toISOString(),
       itemCount: cart.itemCount,
       total: cart.subtotal ? cart.subtotal.toString() : null,
@@ -114,6 +201,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       source: "Abandoned checkout" as const,
       email: checkout.customerEmail,
       customerId: checkout.customerId,
+      customerName: null,
       capturedAt: checkout.checkoutCreatedAt.toISOString(),
       itemCount: checkout.itemCount,
       total: checkout.totalPrice ? checkout.totalPrice.toString() : null,
@@ -125,11 +213,142 @@ export async function loader({ request }: LoaderFunctionArgs) {
     })),
   ].sort((a, b) => new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime());
 
+  const namesByGid = await loadCustomerNames(admin, baseRows);
+
+  const rows = baseRows.map((row) => {
+    const gid = normalizeCustomerGid(row.customerId);
+    const customerName = gid ? namesByGid.get(gid) || null : null;
+    return {
+      ...row,
+      customerName: customerName || customerFallbackName(row.email, row.customerId),
+    };
+  });
+
   return json({
     shop,
     days,
     rows,
     totals: { loggedInCarts: loggedInCarts.length, abandonedCheckouts: abandonedCheckouts.length, all: rows.length },
+  });
+}
+
+async function findCartSource(shop: string, source: string, id: string) {
+  if (source === "Logged-in cart") {
+    const cart = await prisma.customerCart.findFirst({ where: { shop, id } });
+    if (!cart) return null;
+    return {
+      source: "Logged-in cart",
+      email: cart.customerEmail,
+      customerId: cart.customerId,
+      lineItems: toLineItems(cart.lineItems),
+      note: `Created from One Cart Reminder logged-in cart. Cart ID: ${cart.id}`,
+    };
+  }
+
+  if (source === "Abandoned checkout") {
+    const checkout = await prisma.abandonedCheckoutReminder.findFirst({ where: { shop, id } });
+    if (!checkout) return null;
+    return {
+      source: "Abandoned checkout",
+      email: checkout.customerEmail,
+      customerId: checkout.customerId,
+      lineItems: toLineItems(checkout.lineItems),
+      note: `Created from One Cart Reminder abandoned checkout. Checkout ID: ${checkout.abandonedCheckoutId}`,
+    };
+  }
+
+  return null;
+}
+
+export async function action({ request }: ActionFunctionArgs) {
+  const { session, admin } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const actionType = String(formData.get("actionType") || "");
+  const id = String(formData.get("id") || "");
+  const source = String(formData.get("source") || "");
+
+  if (actionType !== "createDraft") {
+    return json<ActionData>({ ok: false, message: "Unsupported action." }, { status: 400 });
+  }
+
+  const cart = await findCartSource(session.shop, source, id);
+
+  if (!cart) {
+    return json<ActionData>({ ok: false, message: "Cart record was not found." }, { status: 404 });
+  }
+
+  const draftLineItems = cart.lineItems
+    .map((item) => ({
+      variantId: normalizeVariantGid(item.variantId),
+      quantity: Math.max(1, Number(item.quantity || 0)),
+    }))
+    .filter((item) => item.variantId && item.quantity > 0);
+
+  if (!draftLineItems.length) {
+    return json<ActionData>({
+      ok: false,
+      message: "No valid Shopify variant IDs were found in this cart, so a draft order could not be created.",
+    }, { status: 400 });
+  }
+
+  const customerGid = normalizeCustomerGid(cart.customerId);
+
+  const input: any = {
+    email: cart.email || undefined,
+    customerId: customerGid || undefined,
+    note: cart.note,
+    tags: ["one-cart-reminder", source === "Logged-in cart" ? "logged-in-cart" : "abandoned-checkout"],
+    lineItems: draftLineItems,
+  };
+
+  if (customerGid) {
+    input.useCustomerDefaultAddress = true;
+  }
+
+  const response = await admin.graphql(
+    `#graphql
+    mutation CreateCartReminderDraftOrder($input: DraftOrderInput!) {
+      draftOrderCreate(input: $input) {
+        draftOrder {
+          id
+          name
+          legacyResourceId
+          invoiceUrl
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }`,
+    { variables: { input } },
+  );
+
+  const payload = await response.json();
+  const result = payload?.data?.draftOrderCreate;
+  const errors = result?.userErrors || [];
+
+  if (errors.length) {
+    return json<ActionData>({
+      ok: false,
+      message: errors.map((error: any) => error.message).join("; "),
+    }, { status: 400 });
+  }
+
+  const draft = result?.draftOrder;
+
+  if (!draft?.id) {
+    return json<ActionData>({ ok: false, message: "Shopify did not return a draft order." }, { status: 400 });
+  }
+
+  const legacyId = draft.legacyResourceId;
+  const draftUrl = legacyId ? `https://admin.shopify.com/store/${shopAdminHandle(session.shop)}/draft_orders/${legacyId}` : undefined;
+
+  return json<ActionData>({
+    ok: true,
+    message: `Draft order ${draft.name || ""} was created successfully.`,
+    draftName: draft.name || undefined,
+    draftUrl,
   });
 }
 
@@ -181,7 +400,7 @@ function CartRow({ row }: { row: Row }) {
       <summary style={{ listStyle: "none", cursor: "pointer", padding: "16px 14px" }}>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.4fr) 120px 140px 190px 130px", gap: 16, alignItems: "center" }}>
           <div>
-            <div style={{ fontWeight: 750, color: "#111827" }}>{row.email || "No email"}</div>
+            <div style={{ fontWeight: 750, color: "#111827" }}>{row.customerName || customerFallbackName(row.email, row.customerId)}</div>
           </div>
           <div style={{ fontWeight: 650 }}>{row.itemCount} item{row.itemCount === 1 ? "" : "s"} ▾</div>
           <div>{money(row.total, row.currencyCode)}</div>
@@ -197,8 +416,17 @@ function CartRow({ row }: { row: Row }) {
             <Badge tone={row.source === "Logged-in cart" ? "info" : "attention"}>{row.source}</Badge>
             <Badge tone={statusTone(row.status)}>{row.status}</Badge>
             {row.reminderSentAt ? <Badge tone="success">{`Sent ${dateText(row.reminderSentAt)}`}</Badge> : null}
+            {row.email ? <Badge tone="info">{row.email}</Badge> : null}
           </div>
-          {row.url ? <Button url={row.url} target="_blank">Open cart / recovery link</Button> : null}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Form method="post">
+              <input type="hidden" name="actionType" value="createDraft" />
+              <input type="hidden" name="id" value={row.id} />
+              <input type="hidden" name="source" value={row.source} />
+              <Button submit variant="primary">Create draft order</Button>
+            </Form>
+            {row.url ? <Button url={row.url} target="_blank">Open cart / recovery link</Button> : null}
+          </div>
         </div>
         <ItemList items={row.items} currencyCode={row.currencyCode} />
       </div>
@@ -208,6 +436,7 @@ function CartRow({ row }: { row: Row }) {
 
 export default function CartHistoryPage() {
   const { shop, days, rows, totals } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>() as ActionData | undefined;
   const location = useLocation();
   const preservedParams = new URLSearchParams(location.search);
   preservedParams.delete("days");
@@ -219,7 +448,7 @@ export default function CartHistoryPage() {
     const q = query.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter((row) => {
-      const haystack = [row.email, row.customerId, row.source, row.status, ...row.items.flatMap((item) => [item.title, item.sku, item.variantTitle])]
+      const haystack = [row.customerName, row.email, row.customerId, row.source, row.status, ...row.items.flatMap((item) => [item.title, item.sku, item.variantTitle])]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -235,6 +464,22 @@ export default function CartHistoryPage() {
           <Text as="p" tone="subdued">{shop} · Last {days} days · click a customer row to expand cart contents</Text>
         </BlockStack>
       </section>
+
+      {actionData ? (
+        <div style={{
+          border: `1px solid ${actionData.ok ? "#86efac" : "#fecaca"}`,
+          background: actionData.ok ? "#f0fdf4" : "#fef2f2",
+          borderRadius: 12,
+          padding: 14,
+        }}>
+          <Text as="p" fontWeight="semibold">{actionData.message}</Text>
+          {actionData.draftUrl ? (
+            <div style={{ marginTop: 8 }}>
+              <Button url={actionData.draftUrl} target="_blank">Open draft order</Button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <InlineGrid columns={{ xs: 1, sm: 3 }} gap="400">
         <Metric label="Logged-in carts" value={totals.loggedInCarts} help="Captured from logged-in storefront customers." />
@@ -259,7 +504,7 @@ export default function CartHistoryPage() {
             type="search"
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="Search customers, SKU, product name, email..."
+            placeholder="Search customer name, SKU, product name, email..."
             style={{ width: "100%", padding: "12px 14px", border: "1px solid #9ca3af", borderRadius: 10, fontSize: 14 }}
           />
 
