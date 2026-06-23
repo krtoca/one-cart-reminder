@@ -135,20 +135,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 function Metric({ label, value, help }: { label: string; value: number; help: string }) {
   return (
-      <>
-      
-/* CR_COMPACT_HISTORY_LIST_FIX */
-<style>
-  .cart-history-table tbody tr > td .cart-source-line,
-  .cart-history-table tbody tr > td .cart-item-preview,
-  .cart-history-table tbody tr > td .cart-preview-line,
-  .cart-history-table tbody tr > td .muted-preview,
-  .cart-history-table tbody tr > td [data-cart-preview="true"],
-  .cart-history-table tbody tr > td [data-cart-source="true"] {
-    display: none !important;
-  }
-</style>
-
     <Card>
       <BlockStack gap="150">
         <Text as="p" tone="subdued">{label}</Text>
@@ -190,16 +176,12 @@ const thStyle: React.CSSProperties = { padding: "10px 12px", textAlign: "left", 
 const tdStyle: React.CSSProperties = { padding: "10px 12px", verticalAlign: "top", color: "#111827" };
 
 function CartRow({ row }: { row: Row }) {
-  const preview = row.items.slice(0, 3).map((item) => `${item.quantity || 0}× ${item.title}`).join(" · ");
-  const hidden = Math.max(0, row.items.length - 3);
-
   return (
     <details style={{ borderBottom: "1px solid #e5e7eb" }}>
       <summary style={{ listStyle: "none", cursor: "pointer", padding: "16px 14px" }}>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.4fr) 120px 140px 190px 130px", gap: 16, alignItems: "center" }}>
           <div>
             <div style={{ fontWeight: 750, color: "#111827" }}>{row.email || "No email"}</div>
-            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>{row.source}{row.customerId ? ` · ${row.customerId}` : ""}</div>
           </div>
           <div style={{ fontWeight: 650 }}>{row.itemCount} item{row.itemCount === 1 ? "" : "s"} ▾</div>
           <div>{money(row.total, row.currencyCode)}</div>
@@ -207,9 +189,6 @@ function CartRow({ row }: { row: Row }) {
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
             <span style={{ padding: "5px 9px", borderRadius: 999, background: statusClass(row.status), fontSize: 12, fontWeight: 700 }}>{row.status}</span>
           </div>
-        </div>
-        <div style={{ marginTop: 8, color: "#6b7280", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {preview || "No item details"}{hidden ? ` · +${hidden} more` : ""}
         </div>
       </summary>
       <div style={{ padding: "0 14px 16px 14px", background: "#fcfcfd" }}>
