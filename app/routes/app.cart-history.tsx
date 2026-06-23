@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { json, redirect } from "@remix-run/node";
+import { json } from "@remix-run/node";
 import { Form, useActionData, useLoaderData, useLocation } from "@remix-run/react";
 import { Badge, BlockStack, Button, Card, InlineGrid, Text, TextField } from "@shopify/polaris";
 import { useMemo, useState } from "react";
@@ -260,6 +260,44 @@ async function findCartSource(shop: string, source: string, id: string) {
   return null;
 }
 
+
+function topLevelAdminRedirectResponse(targetUrl: string) {
+  const safeTarget = JSON.stringify(targetUrl);
+  return new Response(
+    `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Opening draft order...</title>
+    <script>
+      (function () {
+        var target = ${safeTarget};
+        try {
+          if (window.top) {
+            window.top.location.href = target;
+          } else {
+            window.location.href = target;
+          }
+        } catch (error) {
+          window.location.href = target;
+        }
+      })();
+    </script>
+  </head>
+  <body style="font-family: Arial, sans-serif; padding: 24px;">
+    <p>Opening draft order...</p>
+    <p><a href="${targetUrl}" target="_top" rel="noreferrer">Click here if it does not open automatically.</a></p>
+  </body>
+</html>`,
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+      },
+    },
+  );
+}
+
 export async function action({ request }: ActionFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
   const formData = await request.formData();
@@ -345,11 +383,11 @@ export async function action({ request }: ActionFunctionArgs) {
   const draftUrl = legacyId ? `https://admin.shopify.com/store/${shopAdminHandle(session.shop)}/draft_orders/${legacyId}` : undefined;
 
   if (draftUrl) {
-    return redirect(draftUrl);
+    return topLevelAdminRedirectResponse(draftUrl);
   }
 
   if (draftUrl) {
-    return redirect(draftUrl);
+    return topLevelAdminRedirectResponse(draftUrl);
   }
 
   return json<ActionData>({
