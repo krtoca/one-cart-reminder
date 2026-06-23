@@ -1,5 +1,5 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
-import { useLoaderData } from "@remix-run/react";
+import { useLoaderData, Link } from "@remix-run/react";
 import { Badge, BlockStack, Button, Card, InlineGrid, Layout, Page, Text } from "@shopify/polaris";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
@@ -8,7 +8,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
   const [setting, cartsReady, checkoutsReady, sentLogs, failedLogs] = await Promise.all([
-    prisma.cartReminderSetting.findUnique({ where: { shop } }),
+    prisma.cartReminderSetting.upsert({
+      where: { shop },
+      create: { shop, storefrontUrl: `https://${shop}` },
+      update: {},
+    }),
     prisma.customerCart.count({ where: { shop, reminderSentAt: null, orderedAt: null } }),
     prisma.abandonedCheckoutReminder.count({ where: { shop, reminderSentAt: null, checkoutCompletedAt: null } }),
     prisma.reminderEmailLog.count({ where: { shop, ok: true } }),
@@ -20,7 +24,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 export default function Dashboard() {
   const data = useLoaderData<typeof loader>();
   return (
-    <Page title="Cart Reminder" subtitle={data.shop}>
+    <Page title="Dashboard" subtitle={data.shop}>
       <Layout>
         <Layout.Section>
           <InlineGrid columns={{ xs: 1, md: 4 }} gap="400">
@@ -36,8 +40,8 @@ export default function Dashboard() {
               <Text as="h2" variant="headingMd">Status</Text>
               <Badge tone={data.setting?.isEnabled ? "success" : "critical"}>{data.setting?.isEnabled ? "Enabled" : "Disabled"}</Badge>
               <Text as="p">Reminder delay: {data.setting?.daysAfter || 7} days</Text>
-              <Text as="p">Tracker token is available in Settings. Add the theme app embed to capture logged-in customer carts.</Text>
-              <Button url="/app/cart-history">View last 30 days cart history</Button>
+              <Text as="p">For Casper parallel testing, keep Auto cart sync OFF in Settings.</Text>
+              <Link to="/app/cart-history"><Button>View last 30 days cart history</Button></Link>
             </BlockStack>
           </Card>
         </Layout.Section>
