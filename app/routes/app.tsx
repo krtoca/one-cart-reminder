@@ -180,7 +180,7 @@ export default function EmbeddedApp() {
   const embeddedUrl = (path: string) => `${path}${embeddedSearch}`;
 
   const navItems = [
-    { label: "Dashboard", path: "/app", url: embeddedUrl("/app") },
+    { label: "Dashboard", path: "/app/dashboard", url: embeddedUrl("/app/dashboard") },
     { label: "Cart History", path: "/app/cart-history", url: embeddedUrl("/app/cart-history") },
     { label: "Settings", path: "/app/settings", url: embeddedUrl("/app/settings") },
   ];
