@@ -17,6 +17,20 @@ function formatMoney(value: any) {
   return n.toFixed(2);
 }
 
+function normalizeLineItems(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item: any) => item && typeof item === "object")
+    .map((item: any) => ({
+      title: item.title || item.productTitle || "Product",
+      variantTitle: item.variantTitle || item.variant || null,
+      sku: item.sku || null,
+      quantity: Number(item.quantity || 0),
+      price: item.price ?? item.unitPrice ?? null,
+      url: item.url || null,
+    }));
+}
+
 async function logResult(params: {
   shop: string;
   sourceType: string;
@@ -105,6 +119,7 @@ export async function runReminderJobForShop(shop: string) {
           total: formatMoney(cart.subtotal),
           currencyCode: cart.currencyCode,
           sourceLabel: "Logged-in cart",
+          lineItems: normalizeLineItems(cart.lineItems),
         });
         const result = await sendReminderEmail({
           to: cart.customerEmail,
@@ -166,6 +181,7 @@ export async function runReminderJobForShop(shop: string) {
           total: formatMoney(checkout.totalPrice),
           currencyCode: checkout.currencyCode,
           sourceLabel: "Abandoned checkout",
+          lineItems: normalizeLineItems(checkout.lineItems),
         });
         const result = await sendReminderEmail({
           to: checkout.customerEmail,

@@ -29,7 +29,7 @@ function TopMenu() {
   const search = location.search || "";
 
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 16 }}>
+    <nav aria-label="One Cart Reminder navigation" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 18 }}>
       {navItems.map((item) => {
         const isActive = item.match === "/app" ? location.pathname === "/app" : location.pathname.startsWith(item.match);
         return (
@@ -41,23 +41,24 @@ function TopMenu() {
               display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
-              padding: "9px 14px",
+              minHeight: 34,
+              padding: "8px 15px",
               borderRadius: 999,
               textDecoration: "none",
-              fontSize: 14,
-              fontWeight: 650,
+              fontSize: 13,
+              fontWeight: 700,
               lineHeight: 1,
-              border: isActive ? "1px solid #111827" : "1px solid #dfe3e8",
+              border: isActive ? "1px solid #111827" : "1px solid #d8dde5",
               background: isActive ? "#111827" : "#ffffff",
               color: isActive ? "#ffffff" : "#374151",
-              boxShadow: isActive ? "0 1px 2px rgba(0,0,0,0.12)" : "none",
+              boxShadow: isActive ? "0 2px 4px rgba(0,0,0,0.12)" : "0 1px 0 rgba(0,0,0,0.02)",
             }}
           >
             {item.label}
           </Link>
         );
       })}
-    </div>
+    </nav>
   );
 }
 
@@ -68,25 +69,26 @@ function AppShell() {
 
   return (
     <AppProvider i18n={{}}>
-      <div style={{ background: "#f6f6f7", minHeight: "100vh" }}>
-        <div style={{ maxWidth: 1320, margin: "0 auto", padding: "20px 20px 40px" }}>
+      <div style={{ background: "#f3f4f6", minHeight: "100vh" }}>
+        <div style={{ maxWidth: 1240, margin: "0 auto", padding: "22px 22px 44px" }}>
           <Card>
             <Box padding="500">
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
                 <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                     <div
                       aria-hidden="true"
                       style={{
-                        width: 36,
-                        height: 36,
-                        borderRadius: 10,
+                        width: 40,
+                        height: 40,
+                        borderRadius: 12,
                         display: "grid",
                         placeItems: "center",
-                        background: "linear-gradient(135deg, #e0f2fe, #f0f9ff)",
+                        background: "linear-gradient(135deg, #e0f2fe, #f8fafc)",
                         border: "1px solid #bae6fd",
                         color: "#0369a1",
-                        fontWeight: 800,
+                        fontWeight: 900,
+                        letterSpacing: "-0.03em",
                       }}
                     >
                       CR
@@ -98,7 +100,7 @@ function AppShell() {
                   </div>
                   <TopMenu />
                 </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                   <Badge tone="info">{pageLabel}</Badge>
                   <Badge>{shop}</Badge>
                 </div>
@@ -106,9 +108,9 @@ function AppShell() {
             </Box>
           </Card>
 
-          <div style={{ marginTop: 16 }}>
+          <main style={{ marginTop: 18 }}>
             <Outlet />
-          </div>
+          </main>
         </div>
       </div>
     </AppProvider>
@@ -132,13 +134,13 @@ export function ErrorBoundary() {
 
   return (
     <AppProvider i18n={{}}>
-      <div style={{ background: "#f6f6f7", minHeight: "100vh", padding: 24 }}>
+      <div style={{ background: "#f3f4f6", minHeight: "100vh", padding: 24 }}>
         <Card>
           <Box padding="500">
             <BlockStack gap="300">
               <Text as="h1" variant="headingLg">One Cart Reminder</Text>
               <Text as="h2" variant="headingMd" tone="critical">{title}</Text>
-              <pre style={{ whiteSpace: "pre-wrap", background: "#f4f4f4", padding: 12, borderRadius: 8 }}>{message}</pre>
+              <pre style={{ whiteSpace: "pre-wrap", background: "#f8fafc", padding: 12, borderRadius: 8, border: "1px solid #e5e7eb" }}>{message}</pre>
               <Text as="p" tone="subdued">If this appears inside Shopify Admin, check the Render logs for the same timestamp.</Text>
             </BlockStack>
           </Box>
