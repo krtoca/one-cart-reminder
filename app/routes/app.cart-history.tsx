@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { json } from "@remix-run/node";
+import { json, redirect } from "@remix-run/node";
 import { Form, useActionData, useLoaderData, useLocation } from "@remix-run/react";
 import { Badge, BlockStack, Button, Card, InlineGrid, Text, TextField } from "@shopify/polaris";
 import { useMemo, useState } from "react";
@@ -344,9 +344,17 @@ export async function action({ request }: ActionFunctionArgs) {
   const legacyId = draft.legacyResourceId;
   const draftUrl = legacyId ? `https://admin.shopify.com/store/${shopAdminHandle(session.shop)}/draft_orders/${legacyId}` : undefined;
 
+  if (draftUrl) {
+    return redirect(draftUrl);
+  }
+
+  if (draftUrl) {
+    return redirect(draftUrl);
+  }
+
   return json<ActionData>({
     ok: true,
-    message: `Draft order ${draft.name || ""} was created successfully.`,
+    message: `Draft order ${draft.name || ""} was created successfully, but the Shopify Admin URL was not available.`,
     draftName: draft.name || undefined,
     draftUrl,
   });
