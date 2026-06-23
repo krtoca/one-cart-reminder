@@ -151,8 +151,8 @@ export default function Dashboard() {
             </div>
             <Sparkline values={chartValues} />
             <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-              <Badge tone="info">Logged-in carts: {data.recentCarts}</Badge>
-              <Badge tone="attention">Abandoned checkouts: {data.recentCheckouts}</Badge>
+              <Badge tone="info">{`Logged-in carts: ${data.recentCarts}`}</Badge>
+              <Badge tone="attention">{`Abandoned checkouts: ${data.recentCheckouts}`}</Badge>
             </div>
           </BlockStack>
         </Card>

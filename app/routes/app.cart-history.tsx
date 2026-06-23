@@ -203,7 +203,7 @@ function CartRow({ row }: { row: Row }) {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <Badge tone={row.source === "Logged-in cart" ? "info" : "attention"}>{row.source}</Badge>
             <Badge tone={statusTone(row.status)}>{row.status}</Badge>
-            {row.reminderSentAt ? <Badge tone="success">Sent {dateText(row.reminderSentAt)}</Badge> : null}
+            {row.reminderSentAt ? <Badge tone="success">{`Sent ${dateText(row.reminderSentAt)}`}</Badge> : null}
           </div>
           {row.url ? <Button url={row.url} target="_blank">Open cart / recovery link</Button> : null}
         </div>
