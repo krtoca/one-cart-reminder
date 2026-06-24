@@ -214,6 +214,8 @@ export default function CartHistoryPage() {
   const preservedEntries = Array.from(preservedParams.entries());
   const [daysValue, setDaysValue] = useState(String(days));
   const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
 
   const filteredRows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -226,6 +228,10 @@ export default function CartHistoryPage() {
       return haystack.includes(q);
     });
   }, [query, rows]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const paginatedRows = filteredRows.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   return (
     <BlockStack gap="500">
@@ -258,8 +264,11 @@ export default function CartHistoryPage() {
           <input
             type="search"
             value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="Search customers, SKU, product name, email..."
+            onChange={(event) => {
+              setQuery(event.currentTarget.value);
+              setPage(1);
+            }}
+            placeholder="Search customer name, SKU, product name, email..."
             style={{ width: "100%", padding: "12px 14px", border: "1px solid #9ca3af", borderRadius: 10, fontSize: 14 }}
           />
 
@@ -269,16 +278,62 @@ export default function CartHistoryPage() {
               <Text as="p" tone="subdued">Try a different search term or increase the date range.</Text>
             </div>
           ) : (
-            <div style={{ overflowX: "auto" }}>
-              <div style={{ minWidth: 900 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.4fr) 120px 140px 190px 130px", gap: 16, padding: "12px 14px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", fontWeight: 750, color: "#374151" }}>
-                  <div>Customer</div>
-                  <div>Items</div>
-                  <div>Cart total</div>
-                  <div>Last updated</div>
-                  <div style={{ textAlign: "right" }}>Status</div>
+            <div>
+              <div style={{ overflowX: "auto" }}>
+                <div style={{ minWidth: 1220 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.4fr) 110px 130px 170px 130px 170px 120px", gap: 16, padding: "12px 14px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", fontWeight: 750, color: "#374151" }}>
+                    <div>Customer</div>
+                    <div>Items</div>
+                    <div>Cart total</div>
+                    <div>Cart date</div>
+                    <div>Orders</div>
+                    <div>Last order</div>
+                    <div style={{ textAlign: "right" }}>Status</div>
+                  </div>
+                  {paginatedRows.map((row: Row) => (
+                    <CartRow key={`${row.source}-${row.id}`} row={row} />
+                  ))}
                 </div>
-                {filteredRows.map((row) => <CartRow key={`${row.source}-${row.id}`} row={row} />)}
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 14 }}>
+                <button
+                  type="button"
+                  disabled={safePage <= 1}
+                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  style={{
+                    border: "1px solid #d1d5db",
+                    background: safePage <= 1 ? "#f3f4f6" : "#fff",
+                    color: safePage <= 1 ? "#9ca3af" : "#111827",
+                    borderRadius: 8,
+                    padding: "8px 12px",
+                    fontWeight: 700,
+                    cursor: safePage <= 1 ? "not-allowed" : "pointer",
+                  }}
+                >
+                  Previous
+                </button>
+
+                <Text as="p" tone="subdued">
+                  Page {safePage} of {totalPages} · Showing {paginatedRows.length} of {filteredRows.length}
+                </Text>
+
+                <button
+                  type="button"
+                  disabled={safePage >= totalPages}
+                  onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                  style={{
+                    border: "1px solid #d1d5db",
+                    background: safePage >= totalPages ? "#f3f4f6" : "#fff",
+                    color: safePage >= totalPages ? "#9ca3af" : "#111827",
+                    borderRadius: 8,
+                    padding: "8px 12px",
+                    fontWeight: 700,
+                    cursor: safePage >= totalPages ? "not-allowed" : "pointer",
+                  }}
+                >
+                  Next
+                </button>
               </div>
             </div>
           )}
