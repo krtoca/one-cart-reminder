@@ -18,3 +18,8 @@ api_version = "2026-04"
 
 [pos]
 embedded = false
+
+
+[[webhooks.subscriptions]]
+topics = [ "orders/create" ]
+uri = "/webhooks/orders/create"
