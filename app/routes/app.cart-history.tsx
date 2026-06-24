@@ -4,6 +4,7 @@ import { Form, useActionData, useLoaderData, useLocation } from "@remix-run/reac
 import { Badge, BlockStack, Button, Card, InlineGrid, Text, TextField } from "@shopify/polaris";
 import { useEffect, useMemo, useState } from "react";
 import prisma from "../db.server";
+import { syncAbandonedCheckoutsForShop } from "../services/abandoned-checkout.server";
 import { authenticate } from "../shopify.server";
 
 type LineItem = {
@@ -45,7 +46,20 @@ type ActionData = {
   debug?: string;
 };
 
-function safeDays(value: string | null) {
+function parseCookie(header: string | null, key: string) {
+  const cookies = String(header || "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  for (const cookie of cookies) {
+    const [name, ...rest] = cookie.split("=");
+    if (name === key) return decodeURIComponent(rest.join("="));
+  }
+  return null;
+}
+
+function safeDays(value: string | null | undefined) {
   const parsed = Number(value || 30);
   if (!Number.isFinite(parsed)) return 30;
   return Math.min(90, Math.max(1, Math.floor(parsed)));
@@ -55,12 +69,12 @@ function toLineItems(value: unknown): LineItem[] {
   if (!Array.isArray(value)) return [];
   return value.map((item: any) => ({
     productId: item?.productId ?? item?.product_id ?? null,
-    variantId: item?.variantId ?? item?.variant_id ?? item?.id ?? null,
+    variantId: item?.variantId ?? item?.variant_id ?? item?.variant?.id ?? item?.id ?? null,
     title: item?.title || "Untitled item",
-    variantTitle: item?.variantTitle || item?.variant_title || null,
-    sku: item?.sku || null,
+    variantTitle: item?.variantTitle || item?.variant_title || item?.variant?.title || null,
+    sku: item?.sku || item?.variant?.sku || null,
     quantity: item?.quantity ?? 0,
-    price: item?.price ?? null,
+    price: item?.price ?? item?.unitPrice ?? null,
     url: item?.url || null,
   }));
 }
@@ -125,6 +139,13 @@ function trimDebug(value: unknown) {
   } catch {
     return String(value).slice(0, 2000);
   }
+}
+
+function sumMoney(rows: Row[]) {
+  return rows.reduce((sum, row) => {
+    const value = Number(row.total || 0);
+    return Number.isFinite(value) ? sum + value : sum;
+  }, 0);
 }
 
 async function loadCustomerInfo(admin: any, rows: Array<{ customerId: string | null; email: string | null }>) {
@@ -196,19 +217,21 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
   const shop = session.shop;
   const url = new URL(request.url);
-  const days = safeDays(url.searchParams.get("days"));
+  const queryDays = url.searchParams.get("days");
+  const cookieDays = parseCookie(request.headers.get("Cookie"), "cart_history_days");
+  const days = safeDays(queryDays || cookieDays);
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
   const [loggedInCarts, abandonedCheckouts] = await Promise.all([
     prisma.customerCart.findMany({
       where: { shop, lastCapturedAt: { gte: since }, orderedAt: null, itemCount: { gt: 0 } },
       orderBy: { lastCapturedAt: "desc" },
-      take: 500,
+      take: 1000,
     }),
     prisma.abandonedCheckoutReminder.findMany({
-      where: { shop, checkoutCreatedAt: { gte: since } },
+      where: { shop, checkoutCreatedAt: { gte: since }, checkoutCompletedAt: null },
       orderBy: { checkoutCreatedAt: "desc" },
-      take: 500,
+      take: 1000,
     }),
   ]);
 
@@ -240,13 +263,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
       orderTotal: null,
       lastOrderDate: null,
       lastOrderName: null,
-      capturedAt: checkout.checkoutCreatedAt.toISOString(),
+      capturedAt: checkout.checkoutUpdatedAt?.toISOString?.() || checkout.checkoutCreatedAt.toISOString(),
       itemCount: checkout.itemCount,
       total: checkout.totalPrice ? checkout.totalPrice.toString() : null,
       currencyCode: checkout.currencyCode,
       url: checkout.checkoutUrl,
       items: toLineItems(checkout.lineItems),
-      status: checkout.checkoutCompletedAt ? "Completed" : checkout.reminderSentAt ? "Reminder sent" : "Not sent",
+      status: checkout.reminderSentAt ? "Reminder sent" : "Not sent",
       reminderSentAt: checkout.reminderSentAt?.toISOString() || null,
     })),
   ].sort((a, b) => new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime());
@@ -265,12 +288,32 @@ export async function loader({ request }: LoaderFunctionArgs) {
     };
   });
 
-  return json({
-    shop,
-    days,
-    rows,
-    totals: { loggedInCarts: loggedInCarts.length, abandonedCheckouts: abandonedCheckouts.length, all: rows.length },
-  });
+  const loggedInRows = rows.filter((row) => row.source === "Logged-in cart");
+  const abandonedRows = rows.filter((row) => row.source === "Abandoned checkout");
+  const currencyCode = rows.find((row) => row.currencyCode)?.currencyCode || "CAD";
+
+  const headers = new Headers();
+  if (queryDays) {
+    headers.append("Set-Cookie", `cart_history_days=${days}; Path=/app/cart-history; Max-Age=7776000; SameSite=Lax`);
+  }
+
+  return json(
+    {
+      shop,
+      days,
+      rows,
+      totals: {
+        loggedInCarts: loggedInRows.length,
+        abandonedCheckouts: abandonedRows.length,
+        all: rows.length,
+        activeCartAmount: sumMoney(loggedInRows),
+        abandonedAmount: sumMoney(abandonedRows),
+        totalAmount: sumMoney(rows),
+        currencyCode,
+      },
+    },
+    { headers },
+  );
 }
 
 async function findCartSource(shop: string, source: string, id: string) {
@@ -301,6 +344,23 @@ async function findCartSource(shop: string, source: string, id: string) {
   return null;
 }
 
+function draftLineItemFromCartItem(item: LineItem) {
+  const quantity = Math.max(1, Number(item.quantity || 0));
+  const variantId = normalizeVariantGid(item.variantId);
+
+  if (variantId) {
+    return { variantId, quantity };
+  }
+
+  const price = Number(item.price || 0);
+  return {
+    title: item.title || "Untitled item",
+    quantity,
+    originalUnitPrice: Number.isFinite(price) && price > 0 ? price.toFixed(2) : "0.00",
+    requiresShipping: true,
+  };
+}
+
 export async function action({ request }: ActionFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
   const formData = await request.formData();
@@ -309,12 +369,23 @@ export async function action({ request }: ActionFunctionArgs) {
   const source = String(formData.get("source") || "");
   const returnTo = String(formData.get("returnTo") || "/app/cart-history");
 
+  if (actionType === "syncAbandoned") {
+    try {
+      const result = await syncAbandonedCheckoutsForShop(session.shop, new Date());
+      const url = new URL(returnTo, "https://local.invalid");
+      url.searchParams.set("synced", String(result.synced || 0));
+      return redirect(`${url.pathname}${url.search}`);
+    } catch (error: any) {
+      return json<ActionData>({ ok: false, message: "Abandoned checkout sync failed.", debug: String(error?.message || error) }, { status: 500 });
+    }
+  }
+
   if (actionType === "clearCart") {
     if (source !== "Logged-in cart") {
       return json<ActionData>({ ok: false, message: "Only logged-in carts can be cleared manually." }, { status: 400 });
     }
 
-    const result = await prisma.customerCart.updateMany({
+    await prisma.customerCart.updateMany({
       where: { shop: session.shop, id, orderedAt: null },
       data: {
         itemCount: 0,
@@ -325,7 +396,7 @@ export async function action({ request }: ActionFunctionArgs) {
       },
     });
 
-    return json<ActionData>({ ok: true, message: result.count > 0 ? "Cart was cleared from active history." : "Cart was already cleared or not found." });
+    return redirect(returnTo);
   }
 
   if (actionType !== "createDraft") {
@@ -338,29 +409,19 @@ export async function action({ request }: ActionFunctionArgs) {
     return json<ActionData>({ ok: false, message: "Cart record was not found." }, { status: 404 });
   }
 
-  const skippedItems: string[] = [];
   const draftLineItems = cart.lineItems
-    .map((item) => {
-      const variantId = normalizeVariantGid(item.variantId);
-      const quantity = Math.max(1, Number(item.quantity || 0));
-      if (!variantId) skippedItems.push(`${item.title || "Untitled item"}${item.sku ? ` (${item.sku})` : ""}`);
-      return { variantId, quantity };
-    })
-    .filter((item): item is { variantId: string; quantity: number } => Boolean(item.variantId) && item.quantity > 0);
+    .map(draftLineItemFromCartItem)
+    .filter((item: any) => Number(item.quantity || 0) > 0);
 
   if (!draftLineItems.length) {
-    return json<ActionData>({
-      ok: false,
-      message: "No valid Shopify variant IDs were found in this cart, so a draft order could not be created.",
-      debug: `Skipped items: ${skippedItems.slice(0, 20).join(", ")}`,
-    }, { status: 400 });
+    return json<ActionData>({ ok: false, message: "No line items were found, so a draft order could not be created." }, { status: 400 });
   }
 
   const customerGid = normalizeCustomerGid(cart.customerId);
   const input: any = {
     email: cart.email || undefined,
     customerId: customerGid || undefined,
-    note: `${cart.note}${skippedItems.length ? `\n\nSkipped items without variant ID: ${skippedItems.slice(0, 20).join(", ")}` : ""}`,
+    note: cart.note,
     tags: ["one-cart-reminder", source === "Logged-in cart" ? "logged-in-cart" : "abandoned-checkout"],
     lineItems: draftLineItems,
   };
@@ -423,11 +484,10 @@ export async function action({ request }: ActionFunctionArgs) {
     draftName: draft.name || undefined,
     draftUrl,
     redirectToDraft: Boolean(draftUrl),
-    debug: skippedItems.length ? `Skipped ${skippedItems.length} item(s) without Shopify variant ID.` : undefined,
   });
 }
 
-function Metric({ label, value, help }: { label: string; value: number; help: string }) {
+function Metric({ label, value, help }: { label: string; value: string | number; help: string }) {
   return (
     <Card>
       <BlockStack gap="150">
@@ -466,8 +526,8 @@ function ItemList({ items, currencyCode }: { items: LineItem[]; currencyCode?: s
   );
 }
 
-const thStyle: React.CSSProperties = { padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "#374151", borderBottom: "1px solid #e5e7eb" };
-const tdStyle: React.CSSProperties = { padding: "10px 12px", verticalAlign: "top", color: "#111827" };
+const thStyle = { padding: "10px 12px", textAlign: "left" as const, fontWeight: 700, color: "#374151", borderBottom: "1px solid #e5e7eb" };
+const tdStyle = { padding: "10px 12px", verticalAlign: "top" as const, color: "#111827" };
 const rowGridColumns = "minmax(220px, 1.4fr) 110px 130px 170px 130px 170px 120px";
 
 function CartRow({ row, formAction, currentPath }: { row: Row; formAction: string; currentPath: string }) {
@@ -503,38 +563,18 @@ function CartRow({ row, formAction, currentPath }: { row: Row; formAction: strin
               <input type="hidden" name="actionType" value="createDraft" />
               <input type="hidden" name="id" value={row.id} />
               <input type="hidden" name="source" value={row.source} />
-                <input type="hidden" name="returnTo" value={currentPath} />
-                <button
-                  type="submit"
-                style={{
-                  border: "1px solid #202223",
-                  background: "#202223",
-                  color: "#fff",
-                  borderRadius: 8,
-                  padding: "8px 12px",
-                  fontWeight: 700,
-                  cursor: "pointer",
-                }}
-              >
-                Create draft order
-              </button>
+              <input type="hidden" name="returnTo" value={currentPath} />
+              <button type="submit" style={primaryButtonStyle}>Create draft order</button>
             </Form>
             {row.source === "Logged-in cart" ? (
               <Form method="post" action={formAction}>
                 <input type="hidden" name="actionType" value="clearCart" />
                 <input type="hidden" name="id" value={row.id} />
                 <input type="hidden" name="source" value={row.source} />
+                <input type="hidden" name="returnTo" value={currentPath} />
                 <button
                   type="submit"
-                  style={{
-                    border: "1px solid #d1d5db",
-                    background: "#fff",
-                    color: "#374151",
-                    borderRadius: 8,
-                    padding: "8px 12px",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                  }}
+                  style={secondaryButtonStyle}
                   onClick={(event) => {
                     if (!window.confirm("Clear this cart from active history?")) event.preventDefault();
                   }}
@@ -556,6 +596,26 @@ function CartRow({ row, formAction, currentPath }: { row: Row; formAction: strin
   );
 }
 
+const primaryButtonStyle = {
+  border: "1px solid #202223",
+  background: "#202223",
+  color: "#fff",
+  borderRadius: 8,
+  padding: "8px 12px",
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const secondaryButtonStyle = {
+  border: "1px solid #d1d5db",
+  background: "#fff",
+  color: "#374151",
+  borderRadius: 8,
+  padding: "8px 12px",
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
 export default function CartHistoryPage() {
   const { shop, days, rows, totals } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>() as ActionData | undefined;
@@ -570,6 +630,11 @@ export default function CartHistoryPage() {
   const [page, setPage] = useState(1);
   const pageSize = 50;
   const formAction = `${location.pathname}${location.search}`;
+  const synced = new URLSearchParams(location.search).get("synced");
+
+  useEffect(() => {
+    setDaysValue(String(days));
+  }, [days]);
 
   useEffect(() => {
     if (!actionData?.ok || !actionData.redirectToDraft || !actionData.draftUrl) return;
@@ -594,7 +659,13 @@ export default function CartHistoryPage() {
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const paginatedRows = filteredRows.slice((safePage - 1) * pageSize, safePage * pageSize);
-  const getFormAction = location.pathname;
+
+  function updateDays() {
+    const params = new URLSearchParams(location.search);
+    params.set("days", String(safeDays(daysValue)));
+    params.delete("_data");
+    window.location.href = `${location.pathname}?${params.toString()}`;
+  }
 
   return (
     <BlockStack gap="500">
@@ -604,6 +675,12 @@ export default function CartHistoryPage() {
           <Text as="p" tone="subdued">{shop} · Last {days} days · click a customer row to expand cart contents</Text>
         </BlockStack>
       </section>
+
+      {synced !== null ? (
+        <div style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 12, padding: 14 }}>
+          <Text as="p" fontWeight="semibold">Abandoned checkout sync completed. Synced {synced} record(s).</Text>
+        </div>
+      ) : null}
 
       {actionData ? (
         <div style={{
@@ -622,6 +699,12 @@ export default function CartHistoryPage() {
         </div>
       ) : null}
 
+      <InlineGrid columns={{ xs: 1, sm: 2, md: 3 }} gap="400">
+        <Metric label="Active cart amount" value={money(totals.activeCartAmount, totals.currencyCode)} help="Total amount currently sitting in logged-in customer carts." />
+        <Metric label="Abandoned amount" value={money(totals.abandonedAmount, totals.currencyCode)} help="Total amount from synced abandoned checkouts." />
+        <Metric label="Combined amount" value={money(totals.totalAmount, totals.currencyCode)} help="Logged-in carts plus abandoned checkouts in this view." />
+      </InlineGrid>
+
       <InlineGrid columns={{ xs: 1, sm: 3 }} gap="400">
         <Metric label="Logged-in carts" value={totals.loggedInCarts} help="Captured from logged-in storefront customers." />
         <Metric label="Abandoned checkouts" value={totals.abandonedCheckouts} help="Synced checkout recovery records." />
@@ -629,28 +712,20 @@ export default function CartHistoryPage() {
       </InlineGrid>
 
       <Card>
-        <form method="get" action={getFormAction}>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 240px) auto 1fr", gap: 14, alignItems: "end" }}>
+        <BlockStack gap="300">
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 240px) auto auto 1fr", gap: 14, alignItems: "end" }}>
             {preservedEntries.map(([key, value]) => <input key={`${key}-${value}`} type="hidden" name={key} value={value} />)}
-            <TextField label="Show last N days" name="days" type="number" min={1} max={90} value={daysValue} onChange={setDaysValue} autoComplete="off" helpText="Default is 30 days. Maximum is 90 days." />
-            <button
-              type="submit"
-              style={{
-                border: "1px solid #202223",
-                background: "#202223",
-                color: "#fff",
-                borderRadius: 8,
-                padding: "9px 14px",
-                fontWeight: 700,
-                cursor: "pointer",
-                height: 38,
-              }}
-            >
-              Update view
-            </button>
+            <TextField label="Show last N days" name="days" type="number" min={1} max={90} value={daysValue} onChange={setDaysValue} autoComplete="off" helpText="Saved in browser cookie. Maximum is 90 days." />
+            <button type="button" onClick={updateDays} style={{ ...primaryButtonStyle, height: 38 }}>Update view</button>
+            <Form method="post" action={formAction}>
+              <input type="hidden" name="actionType" value="syncAbandoned" />
+              <input type="hidden" name="returnTo" value={currentPath} />
+              <button type="submit" style={{ ...secondaryButtonStyle, height: 38 }}>Sync abandoned</button>
+            </Form>
             <Text as="p" tone="subdued">Showing {filteredRows.length} of {rows.length} records.</Text>
           </div>
-        </form>
+          <Text as="p" tone="subdued">Use Sync abandoned if abandoned checkouts are not showing yet. This pulls open abandoned checkouts from Shopify into this history table.</Text>
+        </BlockStack>
       </Card>
 
       <Card>
@@ -669,7 +744,7 @@ export default function CartHistoryPage() {
           {filteredRows.length === 0 ? (
             <div style={{ textAlign: "center", padding: "42px 16px" }}>
               <Text as="h2" variant="headingMd">No matching cart records</Text>
-              <Text as="p" tone="subdued">Try a different search term or increase the date range.</Text>
+              <Text as="p" tone="subdued">Try a different search term, increase the date range, or click Sync abandoned.</Text>
             </div>
           ) : (
             <div>
@@ -696,12 +771,9 @@ export default function CartHistoryPage() {
                   disabled={safePage <= 1}
                   onClick={() => setPage((current) => Math.max(1, current - 1))}
                   style={{
-                    border: "1px solid #d1d5db",
+                    ...secondaryButtonStyle,
                     background: safePage <= 1 ? "#f3f4f6" : "#fff",
                     color: safePage <= 1 ? "#9ca3af" : "#111827",
-                    borderRadius: 8,
-                    padding: "8px 12px",
-                    fontWeight: 700,
                     cursor: safePage <= 1 ? "not-allowed" : "pointer",
                   }}
                 >
@@ -717,12 +789,9 @@ export default function CartHistoryPage() {
                   disabled={safePage >= totalPages}
                   onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
                   style={{
-                    border: "1px solid #d1d5db",
+                    ...secondaryButtonStyle,
                     background: safePage >= totalPages ? "#f3f4f6" : "#fff",
                     color: safePage >= totalPages ? "#9ca3af" : "#111827",
-                    borderRadius: 8,
-                    padding: "8px 12px",
-                    fontWeight: 700,
                     cursor: safePage >= totalPages ? "not-allowed" : "pointer",
                   }}
                 >
