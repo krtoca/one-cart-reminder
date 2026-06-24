@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { json } from "@remix-run/node";
+import { json, redirect } from "@remix-run/node";
 import { Form, useActionData, useLoaderData, useLocation } from "@remix-run/react";
 import { Badge, BlockStack, Button, Card, InlineGrid, Text, TextField } from "@shopify/polaris";
 import { useEffect, useMemo, useState } from "react";
@@ -307,6 +307,7 @@ export async function action({ request }: ActionFunctionArgs) {
   const actionType = String(formData.get("actionType") || "");
   const id = String(formData.get("id") || "");
   const source = String(formData.get("source") || "");
+  const returnTo = String(formData.get("returnTo") || "/app/cart-history");
 
   if (actionType === "clearCart") {
     if (source !== "Logged-in cart") {
@@ -469,7 +470,7 @@ const thStyle: React.CSSProperties = { padding: "10px 12px", textAlign: "left", 
 const tdStyle: React.CSSProperties = { padding: "10px 12px", verticalAlign: "top", color: "#111827" };
 const rowGridColumns = "minmax(220px, 1.4fr) 110px 130px 170px 130px 170px 120px";
 
-function CartRow({ row, formAction }: { row: Row; formAction: string }) {
+function CartRow({ row, formAction, currentPath }: { row: Row; formAction: string; currentPath: string }) {
   return (
     <details style={{ borderBottom: "1px solid #e5e7eb" }}>
       <summary style={{ listStyle: "none", cursor: "pointer", padding: "16px 14px" }}>
@@ -502,8 +503,9 @@ function CartRow({ row, formAction }: { row: Row; formAction: string }) {
               <input type="hidden" name="actionType" value="createDraft" />
               <input type="hidden" name="id" value={row.id} />
               <input type="hidden" name="source" value={row.source} />
-              <button
-                type="submit"
+                <input type="hidden" name="returnTo" value={currentPath} />
+                <button
+                  type="submit"
                 style={{
                   border: "1px solid #202223",
                   background: "#202223",
@@ -558,6 +560,7 @@ export default function CartHistoryPage() {
   const { shop, days, rows, totals } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>() as ActionData | undefined;
   const location = useLocation();
+  const currentPath = `${location.pathname}${location.search}`;
   const preservedParams = new URLSearchParams(location.search);
   preservedParams.delete("days");
   preservedParams.delete("_data");
@@ -682,7 +685,7 @@ export default function CartHistoryPage() {
                     <div style={{ textAlign: "right" }}>Status</div>
                   </div>
                   {paginatedRows.map((row) => (
-                    <CartRow key={`${row.source}-${row.id}`} row={row} formAction={formAction} />
+                    <CartRow key={`${row.source}-${row.id}`} row={row} formAction={formAction} currentPath={currentPath} />
                   ))}
                 </div>
               </div>
