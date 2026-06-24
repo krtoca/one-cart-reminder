@@ -5,6 +5,55 @@ function normalizeEmail(value: unknown) {
   return String(value || "").trim().toLowerCase();
 }
 
+function cartLineItemsSignature(value: unknown) {
+  if (!Array.isArray(value)) return "";
+
+  return value
+    .map((item: any) => {
+      const variantId = String(item?.variantId || item?.variant_id || item?.id || "").replace(/\D/g, "");
+      const quantity = Number(item?.quantity || 0);
+      return variantId && quantity > 0 ? `${variantId}:${quantity}` : "";
+    })
+    .filter(Boolean)
+    .sort()
+    .join("|");
+}
+
+async function shouldSkipRecentlyClearedCart(params: {
+  shop: string;
+  email: string;
+  customerId?: string | null;
+  cartToken?: string | null;
+  lineItems: any[];
+}) {
+  const recentCutoff = new Date(Date.now() - 30 * 60 * 1000);
+  const identityOr: any[] = [{ customerEmail: params.email }];
+
+  if (params.customerId) {
+    identityOr.push({ customerId: String(params.customerId) });
+  }
+
+  const recentCleared = await prisma.customerCart.findFirst({
+    where: {
+      shop: params.shop,
+      orderedAt: { gte: recentCutoff },
+      OR: identityOr,
+    },
+    orderBy: { orderedAt: "desc" },
+  });
+
+  if (!recentCleared) return false;
+
+  if (params.cartToken && recentCleared.cartToken && params.cartToken === recentCleared.cartToken) {
+    return true;
+  }
+
+  const incomingSignature = cartLineItemsSignature(params.lineItems);
+  const clearedSignature = cartLineItemsSignature(recentCleared.lineItems);
+
+  return Boolean(incomingSignature && clearedSignature && incomingSignature === clearedSignature);
+}
+
 async function markActiveCartAsCleared(params: {
   shop: string;
   email: string;
@@ -59,6 +108,18 @@ export async function captureLoggedInCustomerCart(payload: any) {
     });
 
     return { ok: true, skipped: true, cleared: true, clearedCount, reason: "empty_cart" };
+  }
+
+  const skipRecentlyCleared = await shouldSkipRecentlyClearedCart({
+    shop,
+    email,
+    customerId: payload.customerId ? String(payload.customerId) : null,
+    cartToken: payload.cartToken ? String(payload.cartToken) : null,
+    lineItems,
+  });
+
+  if (skipRecentlyCleared) {
+    return { ok: true, skipped: true, reason: "recently_cleared_cart" };
   }
 
   const existing = await prisma.customerCart.findFirst({
