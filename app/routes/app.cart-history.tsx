@@ -201,7 +201,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const [loggedInCarts, abandonedCheckouts] = await Promise.all([
     prisma.customerCart.findMany({
-      where: { shop, lastCapturedAt: { gte: since } },
+      where: { shop, lastCapturedAt: { gte: since }, orderedAt: null },
       orderBy: { lastCapturedAt: "desc" },
       take: 500,
     }),
