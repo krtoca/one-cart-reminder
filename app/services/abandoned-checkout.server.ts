@@ -27,7 +27,6 @@ export async function syncAbandonedCheckoutsForShop(shop: string, olderThan: Dat
               title
               quantity
               variantTitle
-              variant { id sku }
               originalUnitPriceSet { shopMoney { amount currencyCode } }
             }
           }
@@ -47,8 +46,8 @@ export async function syncAbandonedCheckoutsForShop(shop: string, olderThan: Dat
     const lineItems = (node.lineItems?.nodes || []).map((item: any) => ({
       title: item.title,
       variantTitle: item.variantTitle,
-      variantId: item.variant?.id || null,
-      sku: item.variant?.sku || null,
+      variantId: null,
+      sku: null,
       quantity: Number(item.quantity || 0),
       price: item.originalUnitPriceSet?.shopMoney?.amount || null,
     }));
