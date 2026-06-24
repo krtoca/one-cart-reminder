@@ -475,12 +475,13 @@ function CartRow({ row, formAction }: { row: Row; formAction: string }) {
   return (
     <details style={{ borderBottom: "1px solid #e5e7eb" }}>
       <summary style={{ listStyle: "none", cursor: "pointer", padding: "16px 14px" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.4fr) 120px 140px 160px 160px 130px", gap: 16, alignItems: "center" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.4fr) 110px 130px 170px 130px 170px 120px", gap: 16, alignItems: "center" }}>
           <div>
             <div style={{ fontWeight: 750, color: "#111827" }}>{row.customerName || customerFallbackName(row.email, row.customerId)}</div>
           </div>
           <div style={{ fontWeight: 650 }}>{row.itemCount} item{row.itemCount === 1 ? "" : "s"} ▾</div>
           <div>{money(row.total, row.currencyCode)}</div>
+          <div>{dateText(row.capturedAt)}</div>
           <div>{row.orderCount === null ? "-" : `${row.orderCount} order${row.orderCount === 1 ? "" : "s"}`}</div>
           <div>{row.lastOrderDate ? `${row.lastOrderName || ""} ${dateText(row.lastOrderDate)}`.trim() : "-"}</div>
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -635,11 +636,12 @@ export default function CartHistoryPage() {
             </div>
           ) : (
             <div style={{ overflowX: "auto" }}>
-              <div style={{ minWidth: 1080 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.4fr) 120px 140px 160px 160px 130px", gap: 16, padding: "12px 14px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", fontWeight: 750, color: "#374151" }}>
+              <div style={{ minWidth: 1220 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.4fr) 110px 130px 170px 130px 170px 120px", gap: 16, padding: "12px 14px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", fontWeight: 750, color: "#374151" }}>
                   <div>Customer</div>
                   <div>Items</div>
                   <div>Cart total</div>
+                  <div>Cart date</div>
                   <div>Orders</div>
                   <div>Last order</div>
                   <div style={{ textAlign: "right" }}>Status</div>
