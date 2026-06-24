@@ -5,6 +5,35 @@ function normalizeEmail(value: unknown) {
   return String(value || "").trim().toLowerCase();
 }
 
+async function markActiveCartAsCleared(params: {
+  shop: string;
+  email: string;
+  customerId?: string | null;
+}) {
+  const or: any[] = [{ customerEmail: params.email }];
+
+  if (params.customerId) {
+    or.push({ customerId: String(params.customerId) });
+  }
+
+  const result = await prisma.customerCart.updateMany({
+    where: {
+      shop: params.shop,
+      orderedAt: null,
+      OR: or,
+    },
+    data: {
+      itemCount: 0,
+      subtotal: null,
+      lineItems: [],
+      orderedAt: new Date(),
+      lastCapturedAt: new Date(),
+    },
+  });
+
+  return result.count;
+}
+
 export async function captureLoggedInCustomerCart(payload: any) {
   const shop = normalizeShop(payload.shop);
   const email = normalizeEmail(payload.customerEmail);
@@ -23,7 +52,13 @@ export async function captureLoggedInCustomerCart(payload: any) {
   const itemCount = Number(payload.itemCount || lineItems.reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0));
 
   if (itemCount <= 0) {
-    return { ok: true, skipped: true, reason: "empty_cart" };
+    const clearedCount = await markActiveCartAsCleared({
+      shop,
+      email,
+      customerId: payload.customerId ? String(payload.customerId) : null,
+    });
+
+    return { ok: true, skipped: true, cleared: true, clearedCount, reason: "empty_cart" };
   }
 
   const existing = await prisma.customerCart.findFirst({
