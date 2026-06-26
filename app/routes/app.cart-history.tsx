@@ -86,6 +86,22 @@ function money(value: unknown, currencyCode?: string | null) {
   return `${currencyCode || "CAD"} ${n.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function lineItemsTotal(items: LineItem[]) {
+  const total = items.reduce((sum, item) => {
+    const quantity = Number(item.quantity || 0);
+    const price = Number(item.price || 0);
+    return Number.isFinite(quantity) && Number.isFinite(price) ? sum + quantity * price : sum;
+  }, 0);
+
+  return Number(total.toFixed(2));
+}
+
+function rowAmount(row: Pick<Row, "total" | "items">) {
+  const direct = Number(row.total || 0);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  return lineItemsTotal(row.items || []);
+}
+
 function dateText(value: string | Date | null | undefined) {
   if (!value) return "-";
   const date = new Date(value);
@@ -265,7 +281,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       lastOrderName: null,
       capturedAt: checkout.checkoutUpdatedAt?.toISOString?.() || checkout.checkoutCreatedAt.toISOString(),
       itemCount: checkout.itemCount,
-      total: checkout.totalPrice ? checkout.totalPrice.toString() : null,
+      total: checkout.totalPrice && Number(checkout.totalPrice) > 0 ? checkout.totalPrice.toString() : String(lineItemsTotal(toLineItems(checkout.lineItems)) || ""),
       currencyCode: checkout.currencyCode,
       url: checkout.checkoutUrl,
       items: toLineItems(checkout.lineItems),

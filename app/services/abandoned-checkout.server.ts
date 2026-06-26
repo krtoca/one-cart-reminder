@@ -8,6 +8,16 @@ function moneyCurrency(set: any) {
   return set?.shopMoney?.currencyCode ? String(set.shopMoney.currencyCode) : null;
 }
 
+function lineItemsAmount(lineItems: Array<{ quantity?: number | string | null; price?: number | string | null }>) {
+  const total = lineItems.reduce((sum, item) => {
+    const quantity = Number(item.quantity || 0);
+    const price = Number(item.price || 0);
+    return Number.isFinite(quantity) && Number.isFinite(price) ? sum + quantity * price : sum;
+  }, 0);
+
+  return total > 0 ? Number(total.toFixed(2)) : null;
+}
+
 export async function syncAbandonedCheckoutsForShop(shop: string, olderThan: Date) {
   const queryString = `created_at:<=${olderThan.toISOString()} recovery_state:not_recovered status:open`;
   const query = `#graphql
@@ -50,8 +60,11 @@ export async function syncAbandonedCheckoutsForShop(shop: string, olderThan: Dat
       sku: null,
       quantity: Number(item.quantity || 0),
       price: item.originalUnitPriceSet?.shopMoney?.amount || null,
+      currencyCode: item.originalUnitPriceSet?.shopMoney?.currencyCode || null,
     }));
     const itemCount = lineItems.reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0);
+    const computedTotalPrice = moneyAmount(node.totalPriceSet) ?? lineItemsAmount(lineItems);
+    const computedCurrencyCode = moneyCurrency(node.totalPriceSet) || lineItems.find((item: any) => item.currencyCode)?.currencyCode || "CAD";
 
     await prisma.abandonedCheckoutReminder.upsert({
       where: { shop_abandonedCheckoutId: { shop, abandonedCheckoutId: node.id } },
@@ -62,8 +75,8 @@ export async function syncAbandonedCheckoutsForShop(shop: string, olderThan: Dat
         customerEmail: email,
         customerId: node.customer?.id || null,
         checkoutUrl: String(node.abandonedCheckoutUrl),
-        totalPrice: moneyAmount(node.totalPriceSet),
-        currencyCode: moneyCurrency(node.totalPriceSet),
+        totalPrice: computedTotalPrice,
+        currencyCode: computedCurrencyCode,
         itemCount,
         lineItems,
         checkoutCreatedAt: new Date(node.createdAt),
@@ -76,8 +89,8 @@ export async function syncAbandonedCheckoutsForShop(shop: string, olderThan: Dat
         customerEmail: email,
         customerId: node.customer?.id || null,
         checkoutUrl: String(node.abandonedCheckoutUrl),
-        totalPrice: moneyAmount(node.totalPriceSet),
-        currencyCode: moneyCurrency(node.totalPriceSet),
+        totalPrice: computedTotalPrice,
+        currencyCode: computedCurrencyCode,
         itemCount,
         lineItems,
         checkoutUpdatedAt: new Date(node.updatedAt),
