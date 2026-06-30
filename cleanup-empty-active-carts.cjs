@@ -1,6 +1,4 @@
-
 const { PrismaClient } = require("@prisma/client");
-
 const prisma = new PrismaClient();
 
 async function main() {
@@ -9,15 +7,9 @@ async function main() {
 
   const where = {
     orderedAt: null,
-    OR: [
-      { itemCount: { lte: 0 } },
-      { lineItems: { equals: [] } },
-    ],
+    OR: [{ itemCount: { lte: 0 } }, { lineItems: { equals: [] } }],
   };
-
-  if (shop) {
-    where.shop = shop;
-  }
+  if (shop) where.shop = shop;
 
   const result = await prisma.customerCart.updateMany({
     where,
@@ -31,9 +23,6 @@ async function main() {
   });
 
   console.log(`Cleared ${result.count} empty active cart record(s).`);
-  if (!shop) {
-    console.log("Tip: you can limit by shop with --shop=your-store.myshopify.com");
-  }
 }
 
 main()
@@ -41,6 +30,4 @@ main()
     console.error(error);
     process.exit(1);
   })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+  .finally(async () => prisma.$disconnect());

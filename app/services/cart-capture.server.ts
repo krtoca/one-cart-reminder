@@ -83,6 +83,51 @@ async function markActiveCartAsCleared(params: {
   return result.count;
 }
 
+async function recordEmptyCartUpdate(params: {
+  shop: string;
+  email: string;
+  customerId?: string | null;
+  cartToken?: string | null;
+  cartUrl?: string | null;
+  currencyCode?: string | null;
+}) {
+  const now = new Date();
+  const or: any[] = [{ customerEmail: params.email }];
+
+  if (params.customerId) {
+    or.push({ customerId: String(params.customerId) });
+  }
+
+  const existingEmpty = await prisma.customerCart.findFirst({
+    where: {
+      shop: params.shop,
+      itemCount: 0,
+      OR: or,
+    },
+    orderBy: { lastCapturedAt: "desc" },
+  });
+
+  const data = {
+    shop: params.shop,
+    customerId: params.customerId ? String(params.customerId) : null,
+    customerEmail: params.email,
+    cartToken: params.cartToken ? String(params.cartToken) : null,
+    cartUrl: params.cartUrl ? String(params.cartUrl) : null,
+    itemCount: 0,
+    subtotal: null,
+    currencyCode: params.currencyCode ? String(params.currencyCode) : null,
+    lineItems: [],
+    orderedAt: now,
+    lastCapturedAt: now,
+  };
+
+  if (existingEmpty) {
+    return prisma.customerCart.update({ where: { id: existingEmpty.id }, data });
+  }
+
+  return prisma.customerCart.create({ data });
+}
+
 export async function captureLoggedInCustomerCart(payload: any) {
   const shop = normalizeShop(payload.shop);
   const email = normalizeEmail(payload.customerEmail);
@@ -101,13 +146,23 @@ export async function captureLoggedInCustomerCart(payload: any) {
   const itemCount = Number(payload.itemCount || lineItems.reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0));
 
   if (itemCount <= 0) {
+    const customerId = payload.customerId ? String(payload.customerId) : null;
     const clearedCount = await markActiveCartAsCleared({
       shop,
       email,
-      customerId: payload.customerId ? String(payload.customerId) : null,
+      customerId,
     });
 
-    return { ok: true, skipped: true, cleared: true, clearedCount, reason: "empty_cart" };
+    const emptyRecord = await recordEmptyCartUpdate({
+      shop,
+      email,
+      customerId,
+      cartToken: payload.cartToken ? String(payload.cartToken) : null,
+      cartUrl: payload.cartUrl ? String(payload.cartUrl) : setting.storefrontUrl || `https://${shop}/cart`,
+      currencyCode: payload.currencyCode ? String(payload.currencyCode) : null,
+    });
+
+    return { ok: true, skipped: true, cleared: true, clearedCount, id: emptyRecord.id, reason: "empty_cart" };
   }
 
   const skipRecentlyCleared = await shouldSkipRecentlyClearedCart({

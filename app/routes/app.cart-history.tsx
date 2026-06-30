@@ -32,6 +32,8 @@ type Row = {
   total: string | null;
   currencyCode: string | null;
   url: string | null;
+  cartToken: string | null;
+  totalSource: string;
   items: LineItem[];
   status: string;
   reminderSentAt: string | null;
@@ -118,7 +120,19 @@ function statusTone(status: string): "attention" | "success" | "info" {
 function statusClass(status: string) {
   if (status === "Not sent") return "#fff7ed";
   if (status === "Reminder sent" || status === "Ordered" || status === "Completed") return "#f0fdf4";
+  if (status === "Empty/Cleared") return "#f3f4f6";
   return "#eff6ff";
+}
+
+function cartStatus(cart: { itemCount: number; orderedAt: Date | null; reminderSentAt: Date | null }) {
+  if (cart.itemCount <= 0) return "Empty/Cleared";
+  if (cart.orderedAt) return "Ordered";
+  return cart.reminderSentAt ? "Reminder sent" : "Not sent";
+}
+
+function checkoutStatus(checkout: { checkoutCompletedAt: Date | null; reminderSentAt: Date | null }) {
+  if (checkout.checkoutCompletedAt) return "Completed";
+  return checkout.reminderSentAt ? "Reminder sent" : "Not sent";
 }
 
 function normalizeCustomerGid(value: string | null | undefined) {
@@ -159,7 +173,7 @@ function trimDebug(value: unknown) {
 
 function sumMoney(rows: Row[]) {
   return rows.reduce((sum, row) => {
-    const value = Number(row.total || 0);
+    const value = rowAmount(row);
     return Number.isFinite(value) ? sum + value : sum;
   }, 0);
 }
@@ -236,17 +250,34 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const queryDays = url.searchParams.get("days");
   const cookieDays = parseCookie(request.headers.get("Cookie"), "cart_history_days");
   const days = safeDays(queryDays || cookieDays);
+  const view = url.searchParams.get("view") === "all" ? "all" : "active";
+  const showEmptyUpdates = view === "all" && url.searchParams.get("showEmpty") === "1";
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const loggedInWhere: any = { shop, lastCapturedAt: { gte: since } };
+
+  if (view === "active") {
+    loggedInWhere.orderedAt = null;
+    loggedInWhere.itemCount = { gt: 0 };
+  } else if (!showEmptyUpdates) {
+    loggedInWhere.itemCount = { gt: 0 };
+  }
+
+  const abandonedWhere: any = { shop, checkoutUpdatedAt: { gte: since } };
+
+  if (view === "active") {
+    abandonedWhere.checkoutCompletedAt = null;
+  }
 
   const [loggedInCarts, abandonedCheckouts] = await Promise.all([
     prisma.customerCart.findMany({
-      where: { shop, lastCapturedAt: { gte: since }, orderedAt: null, itemCount: { gt: 0 } },
+      where: loggedInWhere,
       orderBy: { lastCapturedAt: "desc" },
       take: 1000,
     }),
     prisma.abandonedCheckoutReminder.findMany({
-      where: { shop, checkoutCreatedAt: { gte: since }, checkoutCompletedAt: null },
-      orderBy: { checkoutCreatedAt: "desc" },
+      where: abandonedWhere,
+      orderBy: { checkoutUpdatedAt: "desc" },
       take: 1000,
     }),
   ]);
@@ -266,8 +297,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
       total: cart.subtotal ? cart.subtotal.toString() : null,
       currencyCode: cart.currencyCode,
       url: cart.cartUrl,
+      cartToken: cart.cartToken,
+      totalSource: cart.subtotal ? "Captured cart subtotal" : "No subtotal captured",
       items: toLineItems(cart.lineItems),
-      status: cart.reminderSentAt ? "Reminder sent" : "Not sent",
+      status: cartStatus(cart),
       reminderSentAt: cart.reminderSentAt?.toISOString() || null,
     })),
     ...abandonedCheckouts.map((checkout) => ({
@@ -284,8 +317,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
       total: checkout.totalPrice && Number(checkout.totalPrice) > 0 ? checkout.totalPrice.toString() : String(lineItemsTotal(toLineItems(checkout.lineItems)) || ""),
       currencyCode: checkout.currencyCode,
       url: checkout.checkoutUrl,
+      cartToken: null,
+      totalSource: checkout.totalPrice && Number(checkout.totalPrice) > 0 ? "Shopify abandoned checkout total" : "Line item fallback total",
       items: toLineItems(checkout.lineItems),
-      status: checkout.reminderSentAt ? "Reminder sent" : "Not sent",
+      status: checkoutStatus(checkout),
       reminderSentAt: checkout.reminderSentAt?.toISOString() || null,
     })),
   ].sort((a, b) => new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime());
@@ -305,6 +340,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   });
 
   const loggedInRows = rows.filter((row) => row.source === "Logged-in cart");
+  const activeLoggedInRows = loggedInRows.filter((row) => row.itemCount > 0 && row.status !== "Empty/Cleared" && row.status !== "Ordered");
+  const emptyLoggedInRows = loggedInRows.filter((row) => row.itemCount <= 0 || row.status === "Empty/Cleared");
   const abandonedRows = rows.filter((row) => row.source === "Abandoned checkout");
   const currencyCode = rows.find((row) => row.currencyCode)?.currencyCode || "CAD";
 
@@ -317,12 +354,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
     {
       shop,
       days,
+      view,
+      showEmptyUpdates,
       rows,
       totals: {
         loggedInCarts: loggedInRows.length,
+        activeLoggedInCarts: activeLoggedInRows.length,
+        emptyLoggedInCarts: emptyLoggedInRows.length,
         abandonedCheckouts: abandonedRows.length,
         all: rows.length,
-        activeCartAmount: sumMoney(loggedInRows),
+        activeCartAmount: sumMoney(activeLoggedInRows),
         abandonedAmount: sumMoney(abandonedRows),
         totalAmount: sumMoney(rows),
         currencyCode,
@@ -575,14 +616,18 @@ function CartRow({ row, formAction, currentPath }: { row: Row; formAction: strin
             {row.lastOrderDate ? <Badge tone="success">{`Last order: ${row.lastOrderName || ""} ${dateText(row.lastOrderDate)}`}</Badge> : null}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Form method="post" action={formAction}>
-              <input type="hidden" name="actionType" value="createDraft" />
-              <input type="hidden" name="id" value={row.id} />
-              <input type="hidden" name="source" value={row.source} />
-              <input type="hidden" name="returnTo" value={currentPath} />
-              <button type="submit" style={primaryButtonStyle}>Create draft order</button>
-            </Form>
-            {row.source === "Logged-in cart" ? (
+            {row.itemCount > 0 ? (
+              <Form method="post" action={formAction}>
+                <input type="hidden" name="actionType" value="createDraft" />
+                <input type="hidden" name="id" value={row.id} />
+                <input type="hidden" name="source" value={row.source} />
+                <input type="hidden" name="returnTo" value={currentPath} />
+                <button type="submit" style={primaryButtonStyle}>Create draft order</button>
+              </Form>
+            ) : (
+              <span style={{ ...secondaryButtonStyle, cursor: "default", color: "#6b7280" }}>Empty cart</span>
+            )}
+            {row.source === "Logged-in cart" && row.itemCount > 0 ? (
               <Form method="post" action={formAction}>
                 <input type="hidden" name="actionType" value="clearCart" />
                 <input type="hidden" name="id" value={row.id} />
@@ -606,6 +651,14 @@ function CartRow({ row, formAction, currentPath }: { row: Row; formAction: strin
             Logged-in cart links are not customer recovery links. Use Create draft order for admin follow-up.
           </p>
         ) : null}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8, marginBottom: 12, padding: 12, border: "1px solid #e5e7eb", borderRadius: 10, background: "#fff", fontSize: 12, color: "#4b5563" }}>
+          <div><strong>Customer ID:</strong> {row.customerId || "-"}</div>
+          <div><strong>Cart token:</strong> {row.cartToken || "-"}</div>
+          <div><strong>Captured at:</strong> {dateText(row.capturedAt)}</div>
+          <div><strong>Item count:</strong> {row.itemCount}</div>
+          <div><strong>Total source:</strong> {row.totalSource}</div>
+          <div><strong>Record ID:</strong> {row.id}</div>
+        </div>
         <ItemList items={row.items} currencyCode={row.currencyCode} />
       </div>
     </details>
@@ -632,8 +685,26 @@ const secondaryButtonStyle = {
   cursor: "pointer",
 };
 
+const pillStyle = {
+  border: "1px solid #d1d5db",
+  background: "#fff",
+  color: "#374151",
+  borderRadius: 999,
+  padding: "7px 12px",
+  fontWeight: 700,
+  textDecoration: "none",
+  display: "inline-flex",
+};
+
+const activePillStyle = {
+  ...pillStyle,
+  border: "1px solid #202223",
+  background: "#202223",
+  color: "#fff",
+};
+
 export default function CartHistoryPage() {
-  const { shop, days, rows, totals } = useLoaderData<typeof loader>();
+  const { shop, days, view, showEmptyUpdates, rows, totals } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>() as ActionData | undefined;
   const location = useLocation();
   const currentPath = `${location.pathname}${location.search}`;
@@ -648,9 +719,24 @@ export default function CartHistoryPage() {
   const formAction = `${location.pathname}${location.search}`;
   const synced = new URLSearchParams(location.search).get("synced");
 
+  function pathWithParams(updates: Record<string, string | null>) {
+    const params = new URLSearchParams(location.search);
+    params.delete("_data");
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value === null) params.delete(key);
+      else params.set(key, value);
+    });
+    const search = params.toString();
+    return search ? `${location.pathname}?${search}` : location.pathname;
+  }
+
   useEffect(() => {
     setDaysValue(String(days));
   }, [days]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [view, showEmptyUpdates]);
 
   useEffect(() => {
     if (!actionData?.ok || !actionData.redirectToDraft || !actionData.draftUrl) return;
@@ -688,7 +774,7 @@ export default function CartHistoryPage() {
       <section>
         <BlockStack gap="150">
           <Text as="h1" variant="headingLg">Cart history</Text>
-          <Text as="p" tone="subdued">{shop} · Last {days} days · click a customer row to expand cart contents</Text>
+          <Text as="p" tone="subdued">{shop} · Last {days} days · {view === "active" ? "Active carts only" : "All updates"} · click a customer row to expand cart contents</Text>
         </BlockStack>
       </section>
 
@@ -715,20 +801,42 @@ export default function CartHistoryPage() {
         </div>
       ) : null}
 
+      <Card>
+        <BlockStack gap="200">
+          <Text as="h2" variant="headingMd">Cart Reminder / Casper comparison note</Text>
+          <Text as="p" tone="subdued">Active carts shows non-empty logged-in carts that are still available for reminder follow-up. All updates can include empty or cleared cart updates, which is closer to Casper-style history. Data is collected only after this tracker was enabled.</Text>
+        </BlockStack>
+      </Card>
+
       <InlineGrid columns={{ xs: 1, sm: 2, md: 3 }} gap="400">
-        <Metric label="Active cart amount" value={money(totals.activeCartAmount, totals.currencyCode)} help="Total amount currently sitting in logged-in customer carts." />
+        <Metric label="Active cart amount" value={money(totals.activeCartAmount, totals.currencyCode)} help="Total amount currently sitting in active non-empty logged-in customer carts." />
         <Metric label="Abandoned amount" value={money(totals.abandonedAmount, totals.currencyCode)} help="Total amount from synced abandoned checkouts." />
         <Metric label="Combined amount" value={money(totals.totalAmount, totals.currencyCode)} help="Logged-in carts plus abandoned checkouts in this view." />
       </InlineGrid>
 
       <InlineGrid columns={{ xs: 1, sm: 3 }} gap="400">
-        <Metric label="Logged-in carts" value={totals.loggedInCarts} help="Captured from logged-in storefront customers." />
-        <Metric label="Abandoned checkouts" value={totals.abandonedCheckouts} help="Synced checkout recovery records." />
-        <Metric label="Total records" value={totals.all} help="Combined cart and checkout records." />
+        <Metric label="Logged-in records" value={totals.loggedInCarts} help={`${totals.activeLoggedInCarts} active · ${totals.emptyLoggedInCarts} empty/cleared`} />
+        <Metric label="Abandoned checkouts" value={totals.abandonedCheckouts} help="Synced checkout recovery records in this view." />
+        <Metric label="Total records" value={totals.all} help="Combined cart and checkout records in this view." />
       </InlineGrid>
 
       <Card>
         <BlockStack gap="300">
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <a href={pathWithParams({ view: "active", showEmpty: null })} style={view === "active" ? activePillStyle : pillStyle}>Active carts</a>
+            <a href={pathWithParams({ view: "all" })} style={view === "all" ? activePillStyle : pillStyle}>All updates</a>
+            <label style={{ display: "flex", gap: 7, alignItems: "center", color: view === "all" ? "#111827" : "#9ca3af", fontSize: 13, fontWeight: 650 }}>
+              <input
+                type="checkbox"
+                checked={showEmptyUpdates}
+                disabled={view !== "all"}
+                onChange={(event) => {
+                  window.location.href = pathWithParams({ view: "all", showEmpty: event.currentTarget.checked ? "1" : null });
+                }}
+              />
+              Show empty carts
+            </label>
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 240px) auto auto 1fr", gap: 14, alignItems: "end" }}>
             {preservedEntries.map(([key, value]) => <input key={`${key}-${value}`} type="hidden" name={key} value={value} />)}
             <TextField label="Show last N days" name="days" type="number" min={1} max={90} value={daysValue} onChange={setDaysValue} autoComplete="off" helpText="Saved in browser cookie. Maximum is 90 days." />
@@ -740,7 +848,7 @@ export default function CartHistoryPage() {
             </Form>
             <Text as="p" tone="subdued">Showing {filteredRows.length} of {rows.length} records.</Text>
           </div>
-          <Text as="p" tone="subdued">Use Sync abandoned if abandoned checkouts are not showing yet. This pulls open abandoned checkouts from Shopify into this history table.</Text>
+          <Text as="p" tone="subdued">Use Sync abandoned if abandoned checkouts are not showing yet. Active carts is the reminder target view. All updates is mainly for Casper comparison and troubleshooting.</Text>
         </BlockStack>
       </Card>
 
@@ -770,7 +878,7 @@ export default function CartHistoryPage() {
                     <div>Customer</div>
                     <div>Items</div>
                     <div>Cart total</div>
-                    <div>Cart date</div>
+                    <div>Last updated</div>
                     <div>Order total</div>
                     <div>Last order date</div>
                     <div style={{ textAlign: "right" }}>Status</div>
