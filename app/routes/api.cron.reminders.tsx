@@ -1,8 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { runReminderJobAllShops, runReminderJobForShop } from "../services/reminder-runner.server";
-import { ensureAutoReminderSchedulerStarted } from "../services/auto-reminder-scheduler.server";
-ensureAutoReminderSchedulerStarted();
 
 function assertCron(request: Request) {
   const secret = process.env.CRON_SECRET;
