@@ -3,6 +3,8 @@ import { Outlet, useLoaderData, useLocation } from "@remix-run/react";
 import { AppProvider } from "@shopify/polaris";
 import "@shopify/polaris/build/esm/styles.css";
 import { authenticate } from "../shopify.server";
+import { ensureAutoReminderSchedulerStarted } from "../services/auto-reminder-scheduler.server";
+ensureAutoReminderSchedulerStarted();
 
 export async function loader({ request }: LoaderFunctionArgs) {
   await authenticate.admin(request);

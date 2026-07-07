@@ -1,6 +1,8 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { captureLoggedInCustomerCart } from "../services/cart-capture.server";
+import { ensureAutoReminderSchedulerStarted } from "../services/auto-reminder-scheduler.server";
+ensureAutoReminderSchedulerStarted();
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
