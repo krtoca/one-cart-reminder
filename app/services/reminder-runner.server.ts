@@ -31,6 +31,10 @@ function normalizeLineItems(value: unknown) {
     }));
 }
 
+function normalizeEmail(email: string | null | undefined) {
+  return (email || "").trim().toLowerCase();
+}
+
 async function logResult(params: {
   shop: string;
   sourceType: string;
@@ -80,12 +84,78 @@ export async function runReminderJobForShop(shop: string) {
     checkoutCandidates: 0,
     checkoutSent: 0,
     skippedOrdered: 0,
+    skippedDuplicateCarts: 0,
     failed: 0,
   };
 
   if (setting.abandonedCheckoutEnabled) {
     const sync = await syncAbandonedCheckoutsForShop(shop, cutoff);
     summary.checkoutSynced = sync.synced;
+  }
+
+  const checkoutSentEmails = new Set<string>();
+
+  if (setting.abandonedCheckoutEnabled) {
+    const checkouts = await prisma.abandonedCheckoutReminder.findMany({
+      where: {
+        shop,
+        reminderSentAt: null,
+        checkoutCompletedAt: null,
+        checkoutCreatedAt: { lte: cutoff },
+      },
+      take: 100,
+      orderBy: { checkoutCreatedAt: "asc" },
+    });
+    summary.checkoutCandidates = checkouts.length;
+
+    for (const checkout of checkouts) {
+      try {
+        const html = renderReminderEmail({
+          setting,
+          shop,
+          email: checkout.customerEmail,
+          cartUrl: checkout.checkoutUrl,
+          itemCount: checkout.itemCount,
+          total: formatMoney(checkout.totalPrice),
+          currencyCode: checkout.currencyCode,
+          sourceLabel: "Abandoned checkout",
+          lineItems: normalizeLineItems(checkout.lineItems),
+        });
+        const result = await sendReminderEmail({
+          to: checkout.customerEmail,
+          subject: setting.subject,
+          html,
+          fromName: setting.fromName,
+        });
+        await logResult({
+          shop,
+          sourceType: "ABANDONED_CHECKOUT",
+          sourceId: checkout.id,
+          email: checkout.customerEmail,
+          subject: setting.subject,
+          ok: result.ok,
+          errorMessage: result.ok ? null : String((result as any).error || "Email failed"),
+        });
+        if (result.ok) {
+          await prisma.abandonedCheckoutReminder.update({ where: { id: checkout.id }, data: { reminderSentAt: new Date() } });
+          checkoutSentEmails.add(normalizeEmail(checkout.customerEmail));
+          summary.checkoutSent += 1;
+        } else {
+          summary.failed += 1;
+        }
+      } catch (error: any) {
+        summary.failed += 1;
+        await logResult({
+          shop,
+          sourceType: "ABANDONED_CHECKOUT",
+          sourceId: checkout.id,
+          email: checkout.customerEmail,
+          subject: setting.subject,
+          ok: false,
+          errorMessage: String(error?.message || error),
+        });
+      }
+    }
   }
 
   if (setting.loggedInCartEnabled) {
@@ -104,6 +174,13 @@ export async function runReminderJobForShop(shop: string) {
 
     for (const cart of carts) {
       try {
+        const cartEmail = normalizeEmail(cart.customerEmail);
+        if (cartEmail && checkoutSentEmails.has(cartEmail)) {
+          await prisma.customerCart.update({ where: { id: cart.id }, data: { reminderSentAt: new Date() } });
+          summary.skippedDuplicateCarts += 1;
+          continue;
+        }
+
         const ordered = await customerHasOrderSince({ shop, email: cart.customerEmail, since: cart.lastCapturedAt });
         if (ordered) {
           await prisma.customerCart.update({ where: { id: cart.id }, data: { orderedAt: new Date() } });
@@ -149,68 +226,6 @@ export async function runReminderJobForShop(shop: string) {
           sourceType: "LOGGED_IN_CART",
           sourceId: cart.id,
           email: cart.customerEmail,
-          subject: setting.subject,
-          ok: false,
-          errorMessage: String(error?.message || error),
-        });
-      }
-    }
-  }
-
-  if (setting.abandonedCheckoutEnabled) {
-    const checkouts = await prisma.abandonedCheckoutReminder.findMany({
-      where: {
-        shop,
-        reminderSentAt: null,
-        checkoutCompletedAt: null,
-        checkoutCreatedAt: { lte: cutoff },
-      },
-      take: 100,
-      orderBy: { checkoutCreatedAt: "asc" },
-    });
-    summary.checkoutCandidates = checkouts.length;
-
-    for (const checkout of checkouts) {
-      try {
-        const html = renderReminderEmail({
-          setting,
-          shop,
-          email: checkout.customerEmail,
-          cartUrl: checkout.checkoutUrl,
-          itemCount: checkout.itemCount,
-          total: formatMoney(checkout.totalPrice),
-          currencyCode: checkout.currencyCode,
-          sourceLabel: "Abandoned checkout",
-          lineItems: normalizeLineItems(checkout.lineItems),
-        });
-        const result = await sendReminderEmail({
-          to: checkout.customerEmail,
-          subject: setting.subject,
-          html,
-          fromName: setting.fromName,
-        });
-        await logResult({
-          shop,
-          sourceType: "ABANDONED_CHECKOUT",
-          sourceId: checkout.id,
-          email: checkout.customerEmail,
-          subject: setting.subject,
-          ok: result.ok,
-          errorMessage: result.ok ? null : String((result as any).error || "Email failed"),
-        });
-        if (result.ok) {
-          await prisma.abandonedCheckoutReminder.update({ where: { id: checkout.id }, data: { reminderSentAt: new Date() } });
-          summary.checkoutSent += 1;
-        } else {
-          summary.failed += 1;
-        }
-      } catch (error: any) {
-        summary.failed += 1;
-        await logResult({
-          shop,
-          sourceType: "ABANDONED_CHECKOUT",
-          sourceId: checkout.id,
-          email: checkout.customerEmail,
           subject: setting.subject,
           ok: false,
           errorMessage: String(error?.message || error),
