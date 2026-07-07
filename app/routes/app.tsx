@@ -5,6 +5,10 @@ import "@shopify/polaris/build/esm/styles.css";
 import { authenticate } from "../shopify.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  void import("../services/auto-reminder-scheduler.server")
+    .then((module) => module.ensureAutoReminderSchedulerStarted())
+    .catch((error) => console.error("[cart-reminder] automatic reminder scheduler start failed", error?.message || error));
+
   await authenticate.admin(request);
 
   const url = new URL(request.url);

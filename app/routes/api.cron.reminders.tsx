@@ -11,6 +11,10 @@ function assertCron(request: Request) {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  void import("../services/auto-reminder-scheduler.server")
+    .then((module) => module.ensureAutoReminderSchedulerStarted())
+    .catch((error) => console.error("[cart-reminder] automatic reminder scheduler start failed", error?.message || error));
+
   assertCron(request);
   const url = new URL(request.url);
   const shop = url.searchParams.get("shop");
@@ -19,6 +23,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
+  void import("../services/auto-reminder-scheduler.server")
+    .then((module) => module.ensureAutoReminderSchedulerStarted())
+    .catch((error) => console.error("[cart-reminder] automatic reminder scheduler start failed", error?.message || error));
+
   assertCron(request);
   const body = await request.json().catch(() => ({}));
   const result = body.shop ? await runReminderJobForShop(body.shop) : await runReminderJobAllShops();

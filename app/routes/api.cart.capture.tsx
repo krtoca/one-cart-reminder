@@ -9,11 +9,19 @@ const corsHeaders = {
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  void import("../services/auto-reminder-scheduler.server")
+    .then((module) => module.ensureAutoReminderSchedulerStarted())
+    .catch((error) => console.error("[cart-reminder] automatic reminder scheduler start failed", error?.message || error));
+
   if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   return json({ ok: true }, { headers: corsHeaders });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
+  void import("../services/auto-reminder-scheduler.server")
+    .then((module) => module.ensureAutoReminderSchedulerStarted())
+    .catch((error) => console.error("[cart-reminder] automatic reminder scheduler start failed", error?.message || error));
+
   if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
