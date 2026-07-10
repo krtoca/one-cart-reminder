@@ -165,10 +165,10 @@ export async function runReminderJobForShop(shop: string) {
         reminderSentAt: null,
         orderedAt: null,
         itemCount: { gt: 0 },
-        lastCapturedAt: { lte: cutoff },
+        lastItemAddedAt: { lte: cutoff },
       },
       take: 100,
-      orderBy: { lastCapturedAt: "asc" },
+      orderBy: { lastItemAddedAt: "asc" },
     });
     summary.cartCandidates = carts.length;
 
@@ -181,7 +181,7 @@ export async function runReminderJobForShop(shop: string) {
           continue;
         }
 
-        const ordered = await customerHasOrderSince({ shop, email: cart.customerEmail, since: cart.lastCapturedAt });
+        const ordered = await customerHasOrderSince({ shop, email: cart.customerEmail, since: cart.lastItemAddedAt });
         if (ordered) {
           await prisma.customerCart.update({ where: { id: cart.id }, data: { orderedAt: new Date() } });
           summary.skippedOrdered += 1;

@@ -57,20 +57,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const [recentCarts, recentCheckouts, carts7, checkouts7, cartRows, checkoutRows] = await Promise.all([
     prisma.customerCart.count({
-      where: { shop, lastCapturedAt: { gte: since30 } },
+      where: { shop, lastItemAddedAt: { gte: since30 } },
     }),
     prisma.abandonedCheckoutReminder.count({
       where: { shop, checkoutCreatedAt: { gte: since30 } },
     }),
     prisma.customerCart.count({
-      where: { shop, lastCapturedAt: { gte: since7 } },
+      where: { shop, lastItemAddedAt: { gte: since7 } },
     }),
     prisma.abandonedCheckoutReminder.count({
       where: { shop, checkoutCreatedAt: { gte: since7 } },
     }),
     prisma.customerCart.findMany({
-      where: { shop, lastCapturedAt: { gte: since30 } },
-      select: { lastCapturedAt: true },
+      where: { shop, lastItemAddedAt: { gte: since30 } },
+      select: { lastItemAddedAt: true },
       take: 1000,
     }),
     prisma.abandonedCheckoutReminder.findMany({
@@ -81,7 +81,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   ]);
 
   const daily = buildDailyPoints(
-    cartRows.map((row) => row.lastCapturedAt),
+    cartRows.map((row) => row.lastItemAddedAt),
     checkoutRows.map((row) => row.checkoutCreatedAt),
   );
 
@@ -123,9 +123,9 @@ export default function DashboardPage() {
       </section>
 
       <InlineGrid columns={{ xs: 1, sm: 2, md: 4 }} gap="400">
-        <MetricCard label="30-day logged-in carts" value={data.recentCarts} help="Captured from storefront logged-in customers." />
+        <MetricCard label="30-day logged-in carts" value={data.recentCarts} help="Logged-in carts by last item add or quantity increase." />
         <MetricCard label="30-day abandoned checkouts" value={data.recentCheckouts} help="Synced recovery records." />
-        <MetricCard label="7-day logged-in carts" value={data.carts7} help="Recent cart activity." />
+        <MetricCard label="7-day logged-in carts" value={data.carts7} help="Recent cart item additions." />
         <MetricCard label="7-day abandoned checkouts" value={data.checkouts7} help="Recent checkout abandonment." />
       </InlineGrid>
 

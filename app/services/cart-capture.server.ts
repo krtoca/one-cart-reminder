@@ -19,6 +19,39 @@ function cartLineItemsSignature(value: unknown) {
     .join("|");
 }
 
+function cartLineItemsQuantityMap(value: unknown) {
+  const map = new Map<string, number>();
+  if (!Array.isArray(value)) return map;
+
+  for (const item of value as any[]) {
+    const key = String(
+      item?.variantId ||
+        item?.variant_id ||
+        item?.id ||
+        item?.key ||
+        item?.sku ||
+        item?.title ||
+        "",
+    ).trim();
+    const quantity = Number(item?.quantity || 0);
+    if (!key || !Number.isFinite(quantity) || quantity <= 0) continue;
+    map.set(key, (map.get(key) || 0) + quantity);
+  }
+
+  return map;
+}
+
+function hasAddedItemOrIncreasedQuantity(previousItems: unknown, nextItems: unknown) {
+  const previous = cartLineItemsQuantityMap(previousItems);
+  const next = cartLineItemsQuantityMap(nextItems);
+
+  for (const [key, quantity] of next.entries()) {
+    if (quantity > (previous.get(key) || 0)) return true;
+  }
+
+  return false;
+}
+
 async function shouldSkipRecentlyClearedCart(params: {
   shop: string;
   email: string;
@@ -119,6 +152,7 @@ async function recordEmptyCartUpdate(params: {
     lineItems: [],
     orderedAt: now,
     lastCapturedAt: now,
+    lastItemAddedAt: now,
   };
 
   if (existingEmpty) {
@@ -187,6 +221,13 @@ export async function captureLoggedInCustomerCart(payload: any) {
     orderBy: { updatedAt: "desc" },
   });
 
+  const now = new Date();
+  const lastItemAddedAt = existing
+    ? hasAddedItemOrIncreasedQuantity(existing.lineItems, lineItems) || itemCount > existing.itemCount
+      ? now
+      : existing.lastItemAddedAt || existing.lastCapturedAt || now
+    : now;
+
   const data = {
     shop,
     customerId: payload.customerId ? String(payload.customerId) : null,
@@ -197,7 +238,8 @@ export async function captureLoggedInCustomerCart(payload: any) {
     subtotal: payload.subtotal ? Number(payload.subtotal) : null,
     currencyCode: payload.currencyCode ? String(payload.currencyCode) : null,
     lineItems,
-    lastCapturedAt: new Date(),
+    lastCapturedAt: now,
+    lastItemAddedAt,
   };
 
   if (existing) {

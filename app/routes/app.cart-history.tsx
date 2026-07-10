@@ -28,6 +28,8 @@ type Row = {
   lastOrderDate: string | null;
   lastOrderName: string | null;
   capturedAt: string;
+  lastCapturedAt: string | null;
+  lastItemAddedAt: string | null;
   itemCount: number;
   total: string | null;
   currencyCode: string | null;
@@ -254,7 +256,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const showEmptyUpdates = view === "all" && url.searchParams.get("showEmpty") === "1";
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-  const loggedInWhere: any = { shop, lastCapturedAt: { gte: since } };
+  const loggedInWhere: any = { shop };
+  loggedInWhere[view === "active" ? "lastItemAddedAt" : "lastCapturedAt"] = { gte: since };
 
   if (view === "active") {
     loggedInWhere.orderedAt = null;
@@ -272,7 +275,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const [loggedInCarts, abandonedCheckouts] = await Promise.all([
     prisma.customerCart.findMany({
       where: loggedInWhere,
-      orderBy: { lastCapturedAt: "desc" },
+      orderBy: view === "active" ? { lastItemAddedAt: "desc" } : { lastCapturedAt: "desc" },
       take: 1000,
     }),
     prisma.abandonedCheckoutReminder.findMany({
@@ -292,7 +295,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       orderTotal: null,
       lastOrderDate: null,
       lastOrderName: null,
-      capturedAt: cart.lastCapturedAt.toISOString(),
+      capturedAt: (view === "active" ? cart.lastItemAddedAt : cart.lastCapturedAt).toISOString(),
+      lastCapturedAt: cart.lastCapturedAt.toISOString(),
+      lastItemAddedAt: cart.lastItemAddedAt.toISOString(),
       itemCount: cart.itemCount,
       total: cart.subtotal ? cart.subtotal.toString() : null,
       currencyCode: cart.currencyCode,
@@ -313,6 +318,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       lastOrderDate: null,
       lastOrderName: null,
       capturedAt: checkout.checkoutUpdatedAt?.toISOString?.() || checkout.checkoutCreatedAt.toISOString(),
+      lastCapturedAt: checkout.checkoutUpdatedAt?.toISOString?.() || checkout.checkoutCreatedAt.toISOString(),
+      lastItemAddedAt: null,
       itemCount: checkout.itemCount,
       total: checkout.totalPrice && Number(checkout.totalPrice) > 0 ? checkout.totalPrice.toString() : String(lineItemsTotal(toLineItems(checkout.lineItems)) || ""),
       currencyCode: checkout.currencyCode,
@@ -654,7 +661,8 @@ function CartRow({ row, formAction, currentPath }: { row: Row; formAction: strin
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8, marginBottom: 12, padding: 12, border: "1px solid #e5e7eb", borderRadius: 10, background: "#fff", fontSize: 12, color: "#4b5563" }}>
           <div><strong>Customer ID:</strong> {row.customerId || "-"}</div>
           <div><strong>Cart token:</strong> {row.cartToken || "-"}</div>
-          <div><strong>Captured at:</strong> {dateText(row.capturedAt)}</div>
+          {row.lastItemAddedAt ? <div><strong>Last item added:</strong> {dateText(row.lastItemAddedAt)}</div> : null}
+          <div><strong>Captured at:</strong> {dateText(row.lastCapturedAt || row.capturedAt)}</div>
           <div><strong>Item count:</strong> {row.itemCount}</div>
           <div><strong>Total source:</strong> {row.totalSource}</div>
           <div><strong>Record ID:</strong> {row.id}</div>
@@ -774,7 +782,7 @@ export default function CartHistoryPage() {
       <section>
         <BlockStack gap="150">
           <Text as="h1" variant="headingLg">Cart history</Text>
-          <Text as="p" tone="subdued">{shop} · Last {days} days · {view === "active" ? "Active carts only" : "All updates"} · click a customer row to expand cart contents</Text>
+          <Text as="p" tone="subdued">{shop} · Last {days} days · {view === "active" ? "Active carts by last item added" : "All updates"} · click a customer row to expand cart contents</Text>
         </BlockStack>
       </section>
 
@@ -804,7 +812,7 @@ export default function CartHistoryPage() {
       <Card>
         <BlockStack gap="200">
           <Text as="h2" variant="headingMd">Cart Reminder / Casper comparison note</Text>
-          <Text as="p" tone="subdued">Active carts shows non-empty logged-in carts that are still available for reminder follow-up. All updates can include empty or cleared cart updates, which is closer to Casper-style history. Data is collected only after this tracker was enabled.</Text>
+          <Text as="p" tone="subdued">Active carts shows non-empty logged-in carts by the last time an item was added or quantity increased. All updates can include empty or cleared cart updates, which is closer to Casper-style history. Data is collected only after this tracker was enabled.</Text>
         </BlockStack>
       </Card>
 
@@ -848,7 +856,7 @@ export default function CartHistoryPage() {
             </Form>
             <Text as="p" tone="subdued">Showing {filteredRows.length} of {rows.length} records.</Text>
           </div>
-          <Text as="p" tone="subdued">Use Sync abandoned if abandoned checkouts are not showing yet. Active carts is the reminder target view. All updates is mainly for Casper comparison and troubleshooting.</Text>
+          <Text as="p" tone="subdued">Use Sync abandoned if abandoned checkouts are not showing yet. Active carts is the reminder target view and is based on the last item add or quantity increase. All updates is mainly for Casper comparison and troubleshooting.</Text>
         </BlockStack>
       </Card>
 
@@ -878,7 +886,7 @@ export default function CartHistoryPage() {
                     <div>Customer</div>
                     <div>Items</div>
                     <div>Cart total</div>
-                    <div>Last updated</div>
+                    <div>{view === "active" ? "Last item added" : "Last updated"}</div>
                     <div>Order total</div>
                     <div>Last order date</div>
                     <div style={{ textAlign: "right" }}>Status</div>

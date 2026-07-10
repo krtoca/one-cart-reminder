@@ -35,7 +35,7 @@ export async function getSavedCartForAutoSync(payload: any) {
 
   const saved = await prisma.customerCart.findFirst({
     where: { shop, customerEmail: email, reminderSentAt: null, orderedAt: null, itemCount: { gt: 0 } },
-    orderBy: { lastCapturedAt: "desc" },
+    orderBy: { lastItemAddedAt: "desc" },
   });
 
   if (!saved) return { ok: true, enabled: true, lineItems: [] };
