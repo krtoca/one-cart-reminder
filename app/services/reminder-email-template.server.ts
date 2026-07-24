@@ -92,8 +92,7 @@ export function renderReminderEmail(input: RenderInput) {
   <div style="background:#f6f7f9;padding:32px 16px;font-family:Arial,Helvetica,sans-serif;">
     <div style="max-width:660px;margin:0 auto;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e6e8ec;">
       <div style="padding:28px 30px;border-bottom:1px solid #edf0f3;">
-        <div style="font-size:13px;color:#718096;text-transform:uppercase;letter-spacing:.08em;">${escapeHtml(input.shop)}</div>
-        <h1 style="margin:8px 0 0;font-size:26px;line-height:1.25;color:#1a202c;">${escapeHtml(setting.headline)}</h1>
+        <h1 style="margin:0;font-size:26px;line-height:1.25;color:#1a202c;">${escapeHtml(setting.headline)}</h1>
       </div>
       <div style="padding:28px 30px;">
         <p style="margin:0 0 18px;color:#2d3748;font-size:16px;line-height:1.6;">${escapeHtml(setting.bodyText)}</p>
