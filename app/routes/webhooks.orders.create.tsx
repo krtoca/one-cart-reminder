@@ -54,6 +54,8 @@ export async function action({ request }: ActionFunctionArgs) {
     return new Response("OK");
   }
 
+  const placedAt = orderDate(payload);
+
   const cleared = await prisma.customerCart.updateMany({
     where: {
       shop,
@@ -61,7 +63,7 @@ export async function action({ request }: ActionFunctionArgs) {
       OR: or,
     },
     data: {
-      orderedAt: orderDate(payload),
+      orderedAt: placedAt,
       itemCount: 0,
       subtotal: null,
       lineItems: [],
@@ -69,11 +71,24 @@ export async function action({ request }: ActionFunctionArgs) {
     },
   });
 
+  const completedCheckouts = await prisma.abandonedCheckoutReminder.updateMany({
+    where: {
+      shop,
+      checkoutCompletedAt: null,
+      OR: or,
+    },
+    data: {
+      checkoutCompletedAt: placedAt,
+      lastSyncedAt: new Date(),
+    },
+  });
+
   console.log("orders/create cleared active cart(s)", {
     shop,
     email,
     customerIds,
-    count: cleared.count,
+    cartCount: cleared.count,
+    checkoutCount: completedCheckouts.count,
     orderName: payload?.name,
     orderId: payload?.id,
   });

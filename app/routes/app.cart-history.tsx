@@ -137,6 +137,19 @@ function checkoutStatus(checkout: { checkoutCompletedAt: Date | null; reminderSe
   return checkout.reminderSentAt ? "Reminder sent" : "Not sent";
 }
 
+function hasCustomerOrderAfterSource(row: Pick<Row, "source" | "lastOrderDate" | "lastItemAddedAt" | "lastCapturedAt" | "capturedAt">) {
+  if (!row.lastOrderDate) return false;
+
+  const orderTime = new Date(row.lastOrderDate).getTime();
+  const sourceTime = new Date(
+    row.source === "Logged-in cart"
+      ? row.lastItemAddedAt || row.lastCapturedAt || row.capturedAt
+      : row.capturedAt,
+  ).getTime();
+
+  return Number.isFinite(orderTime) && Number.isFinite(sourceTime) && orderTime >= sourceTime;
+}
+
 function normalizeCustomerGid(value: string | null | undefined) {
   const raw = String(value || "").trim();
   if (!raw) return null;
@@ -334,17 +347,30 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const infoByGid = await loadCustomerInfo(admin, baseRows);
 
-  const rows = baseRows.map((row) => {
+  const rowsWithOrderStatus = baseRows.map((row) => {
     const gid = normalizeCustomerGid(row.customerId);
     const customerInfo = gid ? infoByGid.get(gid) || null : null;
-    return {
+    const mapped = {
       ...row,
       customerName: customerInfo?.name || customerFallbackName(row.email, row.customerId),
       orderTotal: customerInfo?.orderTotal ?? null,
       lastOrderDate: customerInfo?.lastOrderDate ?? null,
       lastOrderName: customerInfo?.lastOrderName ?? null,
     };
+
+    if (hasCustomerOrderAfterSource(mapped)) {
+      return {
+        ...mapped,
+        status: mapped.source === "Abandoned checkout" ? "Completed" : "Ordered",
+      };
+    }
+
+    return mapped;
   });
+
+  const rows = view === "active"
+    ? rowsWithOrderStatus.filter((row) => !hasCustomerOrderAfterSource(row))
+    : rowsWithOrderStatus;
 
   const loggedInRows = rows.filter((row) => row.source === "Logged-in cart");
   const activeLoggedInRows = loggedInRows.filter((row) => row.itemCount > 0 && row.status !== "Empty/Cleared" && row.status !== "Ordered");

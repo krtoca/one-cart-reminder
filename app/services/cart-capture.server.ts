@@ -1,5 +1,6 @@
 import prisma from "../db.server";
 import { normalizeShop } from "../lib/shopify-admin.server";
+import { customerHasOrderSince } from "./order-check.server";
 
 function normalizeEmail(value: unknown) {
   return String(value || "").trim().toLowerCase();
@@ -220,6 +221,33 @@ export async function captureLoggedInCustomerCart(payload: any) {
     },
     orderBy: { updatedAt: "desc" },
   });
+
+  if (existing) {
+    try {
+      const ordered = await customerHasOrderSince({
+        shop,
+        email,
+        since: existing.lastItemAddedAt || existing.lastCapturedAt,
+      });
+
+      if (ordered) {
+        await prisma.customerCart.update({
+          where: { id: existing.id },
+          data: {
+            orderedAt: new Date(),
+            itemCount: 0,
+            subtotal: null,
+            lineItems: [],
+            lastCapturedAt: new Date(),
+          },
+        });
+
+        return { ok: true, skipped: true, cleared: true, id: existing.id, reason: "order_after_cart" };
+      }
+    } catch (error) {
+      console.warn("Order check skipped during cart capture", error);
+    }
+  }
 
   const now = new Date();
   const lastItemAddedAt = existing

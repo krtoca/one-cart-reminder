@@ -40,7 +40,7 @@
   }
 
   function sendCart(cart) {
-    if (!cart || !cart.item_count) return Promise.resolve({ skipped: true });
+    if (!cart) return Promise.resolve({ skipped: true });
     return fetch(appUrl + "/api/cart/capture", {
       method: "POST",
       mode: "cors",
@@ -72,7 +72,10 @@
         shop: shop,
         trackerToken: trackerToken,
         customerId: String(customerId || ""),
-        customerEmail: customerEmail
+        customerEmail: customerEmail,
+        cartToken: currentCart && currentCart.token ? currentCart.token : null,
+        itemCount: currentCart && currentCart.item_count ? currentCart.item_count : 0,
+        lineItems: mapCartItems(currentCart || { items: [] })
       })
     })
       .then(function (res) { return res.json(); })

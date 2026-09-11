@@ -110,6 +110,21 @@ export async function runReminderJobForShop(shop: string) {
 
     for (const checkout of checkouts) {
       try {
+        const ordered = await customerHasOrderSince({
+          shop,
+          email: checkout.customerEmail,
+          since: checkout.checkoutCreatedAt,
+        });
+
+        if (ordered) {
+          await prisma.abandonedCheckoutReminder.update({
+            where: { id: checkout.id },
+            data: { checkoutCompletedAt: new Date() },
+          });
+          summary.skippedOrdered += 1;
+          continue;
+        }
+
         const html = renderReminderEmail({
           setting,
           shop,
