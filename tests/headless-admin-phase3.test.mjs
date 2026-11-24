@@ -1,0 +1,6 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {allowedRecipient,settingsPatch} from '../app/services/headless-admin-policy.mjs';
+import {readFileSync} from 'node:fs';
+const route=readFileSync(new URL('../app/routes/api.headless.reminder-admin.tsx',import.meta.url),'utf8');
+test('test recipients are explicit, single addresses',()=>{assert.equal(allowedRecipient(' A@example.com ','a@example.com'),true);assert.equal(allowedRecipient('b@example.com','a@example.com','b@example.com,c@example.com'),true);for(const s of ['b@example.com','a@example.com,b@example.com','a@example.com\nBcc:x@y.com'])assert.equal(allowedRecipient(s,'a@example.com'),false);});
+test('shared settings reject unsafe fields and invalid schedules',()=>{assert.deepEqual(settingsPatch({daysAfter:7,subject:' hello '}),{daysAfter:7,subject:'hello'});for(const s of [{isEnabled:true},{daysAfter:0},{dailySendHour:24},{subject:'a\nb'},{trackerToken:'x'},{shop:'other'}])assert.throws(()=>settingsPatch(s));});
+test('route has separate authorization, bounded data and durable minute claim',()=>{for(const s of ['HEADLESS_REMINDER_ADMIN_TOKEN','HEADLESS_REMINDER_TEST_SEND_ENABLED','skipDuplicates:true','HEADLESS_ADMIN_TEST','take:25','take:50','expectedUpdatedAt'])assert.ok(route.includes(s));assert.ok(!route.includes('headlessCartPilot.update'));});
