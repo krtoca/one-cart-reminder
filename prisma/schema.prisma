@@ -112,7 +112,7 @@ model ReminderEmailLog {
   @@index([shop, email])
 }
 
-// Isolated capture-only pilot. Never used by the email scheduler or theme sync.
+// Isolated Headless capture and controlled reminder pilot.
 model HeadlessCartPilot {
   shop String
   customerId String
@@ -122,5 +122,6 @@ model HeadlessCartPilot {
   lineItems Json
   itemCount Int
   capturedAt DateTime @default(now())
+  checkoutStartedAt DateTime?
   @@id([shop, customerId, storeId])
 }
