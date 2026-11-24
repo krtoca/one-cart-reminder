@@ -111,3 +111,16 @@ model ReminderEmailLog {
   @@unique([shop, sourceType, sourceId])
   @@index([shop, email])
 }
+
+// Isolated capture-only pilot. Never used by the email scheduler or theme sync.
+model HeadlessCartPilot {
+  shop String
+  customerId String
+  storeId String
+  revision Int
+  customerEmail String
+  lineItems Json
+  itemCount Int
+  capturedAt DateTime @default(now())
+  @@id([shop, customerId, storeId])
+}
