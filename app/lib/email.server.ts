@@ -48,7 +48,7 @@ export async function sendReminderEmail(input: SendEmailInput) {
       html: input.html,
       text: input.text || input.html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim(),
     });
-    return { ok: true, messageId: result.messageId };
+    return { ok: true, messageId: result.messageId, smtpResponse: result.response, acceptedCount: result.accepted.length, rejectedCount: result.rejected.length };
   } catch (error: any) {
     console.error("[email] reminder failed", error);
     return { ok: false, error: String(error?.message || error) };

@@ -22,7 +22,8 @@ async function main(){
  const sourceType='HEADLESS_TEST';
  const prior=await prisma.reminderEmailLog.findUnique({where:{shop_sourceType_sourceId:{shop:config.shop,sourceType,sourceId}}});
  console.log({status:state,itemCount:cart.itemCount,revision:cart.revision,checkoutStarted:!!cart.checkoutStartedAt,alreadyAttempted:!!prior,mode:send?'TEST_SEND':'DRY_RUN'});
- if(!send||prior)return;
+ if(!send)return;
+ if(prior){console.log({status:'ALREADY_ATTEMPTED',revision:cart.revision,priorOk:prior.ok});return;}
  // Recheck snapshot and claim before SMTP. Ambiguous delivery is never automatically retried.
  const current=await prisma.headlessCartPilot.findUnique({where:{shop_customerId_storeId:{shop:cart.shop,customerId:cart.customerId,storeId:cart.storeId}}});
  if(!current||current.revision!==cart.revision||current.itemCount<=0||current.customerEmail!==cart.customerEmail){console.log({status:'CART_CHANGED'});return;}
@@ -31,6 +32,6 @@ async function main(){
  const html=renderReminderEmail({setting,shop:config.shop,email:config.recipient,cartUrl:config.cartUrl,itemCount:cart.itemCount,sourceLabel:'Headless cart test'});
  const result=await sendReminderEmail({to:config.recipient,subject:'[TEST] '+setting.subject,html,fromName:setting.fromName});
  await prisma.reminderEmailLog.update({where:{shop_sourceType_sourceId:{shop:config.shop,sourceType,sourceId}},data:{ok:result.ok,errorMessage:result.ok?null:'Test delivery failed or uncertain; inspect SMTP before retry'}});
- console.log({status:result.ok?'TEST_SENT':'TEST_FAILED'});
+ console.log({status:result.ok?'TEST_SENT':'TEST_FAILED',revision:cart.revision,...(result.ok?{messageId:result.messageId,smtpResponse:result.smtpResponse,acceptedCount:result.acceptedCount,rejectedCount:result.rejectedCount}:{error:result.error})});
 }
 main().catch(()=>{console.error('Headless reminder pilot failed; verify configuration, Shopify scopes and DB');process.exitCode=1;}).finally(()=>prisma.$disconnect());
