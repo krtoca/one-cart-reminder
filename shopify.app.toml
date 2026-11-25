@@ -1,10 +1,10 @@
-name = "Cart Reminder"
+﻿name = "Cart Reminder"
 client_id = "2d56451600b668844beda1dc34c81926"
 application_url = "https://one-cart-reminder.onrender.com"
 embedded = true
 
 [access_scopes]
-scopes = "read_orders,read_customers,read_checkouts,write_marketing_events,write_draft_orders,read_draft_orders,read_products"
+scopes = "read_products,read_orders,read_customers,write_customers,read_checkouts,write_draft_orders,read_draft_orders,write_marketing_events"
 
 [auth]
 redirect_urls = [
@@ -23,3 +23,4 @@ embedded = false
 [[webhooks.subscriptions]]
 topics = [ "orders/create" ]
 uri = "/webhooks/orders/create"
+
