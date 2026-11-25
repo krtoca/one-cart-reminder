@@ -2,7 +2,7 @@ import type { ActionFunctionArgs } from '@remix-run/node';
 import { json } from '@remix-run/node';
 import prisma from '../db.server';
 import {shopifyGraphQL} from '../lib/shopify-admin.server';
-import {cartDetailRows} from '../services/headless-cart-detail.mjs';
+import {cartDetailRows,catalogSubtotal} from '../services/headless-cart-detail.mjs';
 import { authorized } from '../services/headless-cart-pilot.mjs';
 import { renderReminderEmail } from '../services/reminder-email-template.server';
 import { sendReminderEmail } from '../lib/email.server';
@@ -29,8 +29,15 @@ export async function action({request}:ActionFunctionArgs){
  const search=typeof input.search==='string'?input.search.trim().slice(0,254):'';
  const where={shop,...filter,...(search?{customerEmail:{contains:search,mode:'insensitive' as const}}:{})};
  const [active,checkout,empty,total,carts,logs,tests]=await Promise.all([
- prisma.headlessCartPilot.count({where:{shop,itemCount:{gt:0}}}),prisma.headlessCartPilot.count({where:{shop,itemCount:{gt:0},checkoutStartedAt:{not:null}}}),prisma.headlessCartPilot.count({where:{shop,itemCount:0}}),prisma.headlessCartPilot.count({where}),prisma.headlessCartPilot.findMany({where,orderBy:[{capturedAt:'desc'},{customerId:'asc'},{storeId:'asc'}],skip:(page-1)*25,take:25,select:{customerId:true,customerEmail:true,storeId:true,revision:true,itemCount:true,capturedAt:true,checkoutStartedAt:true}}),prisma.reminderEmailLog.findMany({where:{shop,sourceType:{in:types}},orderBy:{sentAt:'desc'},take:50,select:{email:true,subject:true,ok:true,errorMessage:true,sentAt:true,sourceType:true}}),prisma.reminderEmailLog.count({where:{shop,sourceType:{in:types},ok:true}})]);
- return reply({setting:publicSetting,active,checkout,empty,total,page,tests,carts:carts.map(c=>({...c,state:candidateState(c,Date.now(),daysAfter)})),logs,testEnabled:process.env.HEADLESS_REMINDER_TEST_SEND_ENABLED==='true',captureEnabled:process.env.HEADLESS_CART_CAPTURE_ENABLED==='true',testRecipient:process.env.HEADLESS_REMINDER_TEST_EMAIL||''});
+ prisma.headlessCartPilot.count({where:{shop,itemCount:{gt:0}}}),prisma.headlessCartPilot.count({where:{shop,itemCount:{gt:0},checkoutStartedAt:{not:null}}}),prisma.headlessCartPilot.count({where:{shop,itemCount:0}}),prisma.headlessCartPilot.count({where}),prisma.headlessCartPilot.findMany({where,orderBy:[{capturedAt:'desc'},{customerId:'asc'},{storeId:'asc'}],skip:(page-1)*25,take:25,select:{customerId:true,customerEmail:true,storeId:true,revision:true,itemCount:true,capturedAt:true,checkoutStartedAt:true,lineItems:true}}),prisma.reminderEmailLog.findMany({where:{shop,sourceType:{in:types}},orderBy:{sentAt:'desc'},take:50,select:{email:true,subject:true,ok:true,errorMessage:true,sentAt:true,sourceType:true}}),prisma.reminderEmailLog.count({where:{shop,sourceType:{in:types},ok:true}})]);
+ const names=new Map<string,string>();let currency:string|null=null;
+ try{const result=await shopifyGraphQL(shop,`query ReminderCustomers($ids:[ID!]!){shop{currencyCode} nodes(ids:$ids){... on Customer{id displayName}}}`,{ids:[...new Set(carts.map(c=>c.customerId))]});currency=result?.shop?.currencyCode??null;for(const n of result?.nodes||[])if(n?.id&&n.displayName)names.set(n.id,n.displayName);}catch{console.warn('[Headless reminder admin] customer lookup unavailable');}
+ const snapshots=carts.map(c=>({cart:c,rows:(Array.isArray(c.lineItems)?c.lineItems:[]).filter((r:any)=>r&&typeof r.id==='string'&&Number.isSafeInteger(r.qty)&&r.qty>0) as {id:string;qty:number}[]}));
+ const ids=[...new Set(snapshots.flatMap(s=>s.rows.map(r=>r.id)))];const variants:any[]=[];
+ // Bound overview enrichment; detailed lookup remains available for every saved cart.
+ for(let i=0;i<Math.min(ids.length,500);i+=100){try{const r=await shopifyGraphQL(shop,`query ReminderOverviewVariants($ids:[ID!]!){nodes(ids:$ids){... on ProductVariant{id price}}}`,{ids:ids.slice(i,i+100)});if(Array.isArray(r?.nodes))variants.push(...r.nodes);}catch{console.warn('[Headless reminder admin] overview product lookup unavailable');break;}}
+ const summaries=snapshots.map(({cart:c,rows})=>{const {lineItems,...summary}=c;return {...summary,customerName:names.get(c.customerId)??null,currency,catalogSubtotalCents:rows.reduce((n,r)=>n+r.qty,0)===c.itemCount?catalogSubtotal(cartDetailRows(rows,variants)):null,state:candidateState(c,Date.now(),daysAfter)};});
+ return reply({setting:publicSetting,active,checkout,empty,total,page,tests,carts:summaries,logs,testEnabled:process.env.HEADLESS_REMINDER_TEST_SEND_ENABLED==='true',captureEnabled:process.env.HEADLESS_CART_CAPTURE_ENABLED==='true',testRecipient:process.env.HEADLESS_REMINDER_TEST_EMAIL||''});
  }
  if(input.op==='cart-detail'){
  if(!/^gid:\/\/shopify\/Customer\/\d{6,20}$/.test(input.customerId||'')||!/^(default|[a-z0-9-]{8,48})$/.test(input.storeId||'')||!Number.isSafeInteger(input.revision))return reply({error:'Invalid cart reference'},400);
@@ -39,9 +46,10 @@ export async function action({request}:ActionFunctionArgs){
  const snapshot=(Array.isArray(cart.lineItems)?cart.lineItems:[]).filter((r:any)=>r&&/^gid:\/\/shopify\/ProductVariant\/\d{1,20}$/.test(r.id)&&Number.isSafeInteger(r.qty)&&r.qty>0).slice(0,200) as {id:string;qty:number}[];
  let customer=null,currency=null,variants:any[]=[],lookupIncomplete=false;
  try{const result=await shopifyGraphQL(shop,`query ReminderCustomer($id:ID!){shop{currencyCode} customer(id:$id){id displayName numberOfOrders orders(first:1,sortKey:CREATED_AT,reverse:true){nodes{name createdAt}}}}`,{id:cart.customerId});customer=result?.customer?.id===cart.customerId?result.customer:null;currency=result?.shop?.currencyCode??null;}catch{lookupIncomplete=true;}
- for(let i=0;i<snapshot.length;i+=50){try{const result=await shopifyGraphQL(shop,`query ReminderVariants($ids:[ID!]!){nodes(ids:$ids){... on ProductVariant{id title sku price product{title}}}}`,{ids:snapshot.slice(i,i+50).map(r=>r.id)});if(Array.isArray(result?.nodes))variants.push(...result.nodes);else lookupIncomplete=true;}catch{lookupIncomplete=true;}}
+ for(let i=0;i<snapshot.length;i+=50){try{const result=await shopifyGraphQL(shop,`query ReminderVariants($ids:[ID!]!){nodes(ids:$ids){... on ProductVariant{id title sku price product{title}}}}`,{ids:snapshot.slice(i,i+50).map(r=>r.id)});if(Array.isArray(result?.nodes))variants.push(...result.nodes);else lookupIncomplete=true;}catch{lookupIncomplete=true;console.warn('[Headless reminder admin] product lookup unavailable; verify read_products scope');}}
  const lines=cartDetailRows(snapshot,variants);
- return reply({customerName:customer?.displayName??null,orderCount:customer?.numberOfOrders??null,lastOrder:customer?.orders?.nodes?.[0]??null,currency,lines,lookupIncomplete:lookupIncomplete||lines.some(r=>r.product===null)});
+ const catalogSubtotalCents=snapshot.reduce((n,r)=>n+r.qty,0)===cart.itemCount?catalogSubtotal(lines):null;
+ return reply({customerName:customer?.displayName??null,orderCount:customer?.numberOfOrders??null,lastOrder:customer?.orders?.nodes?.[0]??null,currency,lines,catalogSubtotalCents,lookupIncomplete:lookupIncomplete||lines.some(r=>r.product===null)});
  }
  if(input.op==='settings'){
  let patch;try{patch=settingsPatch(input.settings);}catch{return reply({error:'Invalid settings'},400);}

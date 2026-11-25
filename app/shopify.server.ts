@@ -9,7 +9,7 @@ const shopify = shopifyApp({
   // Keep this configurable so the app can run with older Shopify packages whose ApiVersion enum
   // may not yet include the newest Shopify API version names.
   apiVersion: (process.env.SHOPIFY_API_VERSION || "2025-10") as ApiVersion,
-  scopes: (process.env.SCOPES || "read_orders,read_customers,read_checkouts").split(",").map((s) => s.trim()).filter(Boolean),
+  scopes: (process.env.SCOPES || "read_orders,read_customers,read_checkouts,read_products").split(",").map((s) => s.trim()).filter(Boolean),
   appUrl: process.env.SHOPIFY_APP_URL || "",
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
