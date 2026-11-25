@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {summarizeCartValues} from '../app/services/headless-cart-metrics.mjs';
+const a={itemCount:7,lineItems:[{id:'a',qty:6},{id:'b',qty:1}],checkoutStartedAt:'2026-11-24'};const b={itemCount:2,lineItems:[{id:'a',qty:2}]};const prices=[{id:'a',price:'30.00'},{id:'b',price:'30.00'}];
+test('global active includes checkout subset only once',()=>{const r=summarizeCartValues([a,b],prices,{currency:'CAD'});assert.equal(r.activeCents,27000);assert.equal(r.checkoutCents,21000);});
+test('missing price or truncated scan cannot imply full amount',()=>{assert.equal(summarizeCartValues([a,b],prices.slice(0,1),{currency:'CAD'}).activeCents,null);assert.equal(summarizeCartValues([a,b],prices,{currency:'CAD',truncated:true}).checkoutCents,null);});
+test('missing quantities fail closed and empty carts are excluded',()=>{assert.equal(summarizeCartValues([{...a,itemCount:8}],prices,{currency:'CAD'}).activeCents,null);assert.equal(summarizeCartValues([{itemCount:0,lineItems:[]}],[],{currency:'CAD'}).activeCents,0);});

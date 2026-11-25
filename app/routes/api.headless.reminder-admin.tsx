@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from '@remix-run/node';
 import { json } from '@remix-run/node';
 import prisma from '../db.server';
 import {shopifyGraphQL} from '../lib/shopify-admin.server';
+import {summarizeCartValues} from '../services/headless-cart-metrics.mjs';
 import {cartDetailRows,catalogSubtotal} from '../services/headless-cart-detail.mjs';
 import { authorized } from '../services/headless-cart-pilot.mjs';
 import { renderReminderEmail } from '../services/reminder-email-template.server';
@@ -23,6 +24,18 @@ export async function action({request}:ActionFunctionArgs){
  const {isEnabled,loggedInCartEnabled,abandonedCheckoutEnabled,daysAfter,dailySendHour,timezone,fromName,subject,headline,bodyText,buttonText,footerText,updatedAt}=setting;
  const publicSetting={isEnabled,loggedInCartEnabled,abandonedCheckoutEnabled,daysAfter,dailySendHour,timezone,fromName,subject,headline,bodyText,buttonText,footerText,updatedAt};
  const types=['HEADLESS_TEST','HEADLESS_ADMIN_TEST'];
+ if(input.op==='cart-metrics'){
+ // Independent of the list page and search. Bound synchronous catalog enrichment.
+ const carts=await prisma.headlessCartPilot.findMany({where:{shop,itemCount:{gt:0}},orderBy:[{customerId:'asc'},{storeId:'asc'}],take:1001,select:{itemCount:true,lineItems:true,checkoutStartedAt:true}});
+ const ids=[...new Set(carts.slice(0,1000).flatMap(c=>(Array.isArray(c.lineItems)?c.lineItems:[]).filter((r:any)=>r&&/^gid:\/\/shopify\/ProductVariant\/\d{1,20}$/.test(r.id)).map((r:any)=>String(r.id))))];
+ const truncated=carts.length>1000||ids.length>1000;
+ let currency:string|null=null;const variants:any[]=[];
+ if(!truncated){try{
+ const shopInfo=await shopifyGraphQL(shop,`query ReminderMetricsCurrency{shop{currencyCode}}`);currency=shopInfo?.shop?.currencyCode??null;
+ for(let i=0;i<ids.length;i+=100){const r=await shopifyGraphQL(shop,`query ReminderMetricsVariants($ids:[ID!]!){nodes(ids:$ids){... on ProductVariant{id price}}}`,{ids:ids.slice(i,i+100)});if(Array.isArray(r?.nodes))variants.push(...r.nodes);}
+ }catch{console.warn('[Headless reminder admin] metrics catalog lookup incomplete');}}
+ return reply(summarizeCartValues(carts.slice(0,1000),variants,{truncated,currency}));
+ }
  if(input.op==='overview'){
  const page=Number.isInteger(input.page)&&input.page>=1&&input.page<=10000?input.page:1;
  const filter=input.filter==='checkout'?{itemCount:{gt:0},checkoutStartedAt:{not:null}}:input.filter==='empty'?{itemCount:0}:{};

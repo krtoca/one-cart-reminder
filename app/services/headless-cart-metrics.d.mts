@@ -1,0 +1,1 @@
+export function summarizeCartValues(carts:{itemCount:number;lineItems:unknown;checkoutStartedAt?:unknown}[],variants:any[],options?:{truncated?:boolean;currency?:string|null}):{currency:string|null;activeCents:number|null;checkoutCents:number|null;missing:number;checkoutMissing:number;checkoutCount:number;truncated:boolean};
