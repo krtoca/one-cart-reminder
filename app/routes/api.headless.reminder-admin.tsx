@@ -1,6 +1,8 @@
 import type { ActionFunctionArgs } from '@remix-run/node';
 import { json } from '@remix-run/node';
 import prisma from '../db.server';
+import {shopifyGraphQL} from '../lib/shopify-admin.server';
+import {cartDetailRows} from '../services/headless-cart-detail.mjs';
 import { authorized } from '../services/headless-cart-pilot.mjs';
 import { renderReminderEmail } from '../services/reminder-email-template.server';
 import { sendReminderEmail } from '../lib/email.server';
@@ -24,10 +26,22 @@ export async function action({request}:ActionFunctionArgs){
  if(input.op==='overview'){
  const page=Number.isInteger(input.page)&&input.page>=1&&input.page<=10000?input.page:1;
  const filter=input.filter==='checkout'?{itemCount:{gt:0},checkoutStartedAt:{not:null}}:input.filter==='empty'?{itemCount:0}:{};
- const where={shop,...filter};
+ const search=typeof input.search==='string'?input.search.trim().slice(0,254):'';
+ const where={shop,...filter,...(search?{customerEmail:{contains:search,mode:'insensitive' as const}}:{})};
  const [active,checkout,empty,total,carts,logs,tests]=await Promise.all([
- prisma.headlessCartPilot.count({where:{shop,itemCount:{gt:0}}}),prisma.headlessCartPilot.count({where:{shop,itemCount:{gt:0},checkoutStartedAt:{not:null}}}),prisma.headlessCartPilot.count({where:{shop,itemCount:0}}),prisma.headlessCartPilot.count({where}),prisma.headlessCartPilot.findMany({where,orderBy:[{capturedAt:'desc'},{customerId:'asc'},{storeId:'asc'}],skip:(page-1)*25,take:25,select:{customerEmail:true,storeId:true,revision:true,itemCount:true,capturedAt:true,checkoutStartedAt:true}}),prisma.reminderEmailLog.findMany({where:{shop,sourceType:{in:types}},orderBy:{sentAt:'desc'},take:50,select:{email:true,subject:true,ok:true,errorMessage:true,sentAt:true,sourceType:true}}),prisma.reminderEmailLog.count({where:{shop,sourceType:{in:types},ok:true}})]);
+ prisma.headlessCartPilot.count({where:{shop,itemCount:{gt:0}}}),prisma.headlessCartPilot.count({where:{shop,itemCount:{gt:0},checkoutStartedAt:{not:null}}}),prisma.headlessCartPilot.count({where:{shop,itemCount:0}}),prisma.headlessCartPilot.count({where}),prisma.headlessCartPilot.findMany({where,orderBy:[{capturedAt:'desc'},{customerId:'asc'},{storeId:'asc'}],skip:(page-1)*25,take:25,select:{customerId:true,customerEmail:true,storeId:true,revision:true,itemCount:true,capturedAt:true,checkoutStartedAt:true}}),prisma.reminderEmailLog.findMany({where:{shop,sourceType:{in:types}},orderBy:{sentAt:'desc'},take:50,select:{email:true,subject:true,ok:true,errorMessage:true,sentAt:true,sourceType:true}}),prisma.reminderEmailLog.count({where:{shop,sourceType:{in:types},ok:true}})]);
  return reply({setting:publicSetting,active,checkout,empty,total,page,tests,carts:carts.map(c=>({...c,state:candidateState(c,Date.now(),daysAfter)})),logs,testEnabled:process.env.HEADLESS_REMINDER_TEST_SEND_ENABLED==='true',captureEnabled:process.env.HEADLESS_CART_CAPTURE_ENABLED==='true',testRecipient:process.env.HEADLESS_REMINDER_TEST_EMAIL||''});
+ }
+ if(input.op==='cart-detail'){
+ if(!/^gid:\/\/shopify\/Customer\/\d{6,20}$/.test(input.customerId||'')||!/^(default|[a-z0-9-]{8,48})$/.test(input.storeId||'')||!Number.isSafeInteger(input.revision))return reply({error:'Invalid cart reference'},400);
+ const cart=await prisma.headlessCartPilot.findUnique({where:{shop_customerId_storeId:{shop,customerId:input.customerId,storeId:input.storeId}}});
+ if(!cart||cart.revision!==input.revision)return reply({error:'Cart changed. Refresh the list.'},409);
+ const snapshot=(Array.isArray(cart.lineItems)?cart.lineItems:[]).filter((r:any)=>r&&/^gid:\/\/shopify\/ProductVariant\/\d{1,20}$/.test(r.id)&&Number.isSafeInteger(r.qty)&&r.qty>0).slice(0,200) as {id:string;qty:number}[];
+ let customer=null,currency=null,variants:any[]=[],lookupIncomplete=false;
+ try{const result=await shopifyGraphQL(shop,`query ReminderCustomer($id:ID!){shop{currencyCode} customer(id:$id){id displayName numberOfOrders orders(first:1,sortKey:CREATED_AT,reverse:true){nodes{name createdAt}}}}`,{id:cart.customerId});customer=result?.customer?.id===cart.customerId?result.customer:null;currency=result?.shop?.currencyCode??null;}catch{lookupIncomplete=true;}
+ for(let i=0;i<snapshot.length;i+=50){try{const result=await shopifyGraphQL(shop,`query ReminderVariants($ids:[ID!]!){nodes(ids:$ids){... on ProductVariant{id title sku price product{title}}}}`,{ids:snapshot.slice(i,i+50).map(r=>r.id)});if(Array.isArray(result?.nodes))variants.push(...result.nodes);else lookupIncomplete=true;}catch{lookupIncomplete=true;}}
+ const lines=cartDetailRows(snapshot,variants);
+ return reply({customerName:customer?.displayName??null,orderCount:customer?.numberOfOrders??null,lastOrder:customer?.orders?.nodes?.[0]??null,currency,lines,lookupIncomplete:lookupIncomplete||lines.some(r=>r.product===null)});
  }
  if(input.op==='settings'){
  let patch;try{patch=settingsPatch(input.settings);}catch{return reply({error:'Invalid settings'},400);}
